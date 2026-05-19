@@ -1,5 +1,51 @@
 const AppError = require('../utils/AppError');
 const coachWorkspaceRepository = require('../repositories/coachWorkspace.repository');
+const groupRepository = require('../repositories/group.repository');
+
+const COMFORT_OVERVIEW_CATEGORIES = {
+  creativity: {
+    label: 'Креативност',
+    columns: [
+      { actionCode: 'drawing_desire', label: 'Рисуване - желание', type: 'score' },
+      { actionCode: 'drawing_skill', label: 'Рисуване - умение', type: 'score' },
+      { actionCode: 'dancing_desire', label: 'Танци - желание', type: 'score' },
+      { actionCode: 'dancing_skill', label: 'Танци - умение', type: 'score' },
+    ],
+  },
+  life_and_technique: {
+    label: 'Бит и техника',
+    columns: [
+      { actionCode: 'daily_life_skills', label: 'Битови умения', type: 'score' },
+      { actionCode: 'tools_and_technique', label: 'Инструменти и техника', type: 'score' },
+      { actionCode: 'diy', label: 'Направи си сам', type: 'score' },
+    ],
+  },
+  sport: {
+    label: 'Спорт',
+    columns: [
+      { actionCode: 'general_physical_activity', label: 'Физическа активност', type: 'score' },
+      { actionCode: 'favorite_sport', label: 'Любим спорт', type: 'text' },
+    ],
+  },
+  social_contact: {
+    label: 'Социален контакт',
+    columns: [
+      { actionCode: 'temperament', label: 'Темперамент', type: 'score' },
+      { actionCode: 'social_has_friends', label: 'Социални контакти', type: 'score' },
+      { actionCode: 'joining_new_group', label: 'Включване в група', type: 'score' },
+      { actionCode: 'stage_performance', label: 'Представяне пред хора', type: 'score' },
+      { actionCode: 'emotional_sensitivity', label: 'Обидчивост', type: 'score' },
+      { actionCode: 'rules_tendency', label: 'Спазване на правила', type: 'score' },
+    ],
+  },
+  reading: {
+    label: 'Четене',
+    columns: [
+      { actionCode: 'reading_level', label: 'Ниво на четене', type: 'score' },
+      { actionCode: 'reading_desire', label: 'Желание за четене', type: 'score' },
+    ],
+  },
+};
 
 function ensureCanUseCoachWorkspace(actor) {
   if (!['super_admin', 'admin', 'manager', 'coach'].includes(actor.role)) {
@@ -162,6 +208,105 @@ function mapGroupRowsToSelectedAcademy(selectedAcademy, groupRows) {
   ];
 }
 
+async function ensureCoachCanAccessGroup(actor, groupId) {
+  if (actor.role !== 'coach') {
+    return;
+  }
+
+  const canAccess = await groupRepository.coachCanAccessGroup(actor.id, groupId);
+
+  if (!canAccess) {
+    throw new AppError(403, 'Нямате достъп до тази група.');
+  }
+}
+
+function normalizeScoreInterpretation(zone, rawInterpretation) {
+  if (zone === 'green') {
+    return 'Комфортна зона';
+  }
+
+  if (zone === 'yellow') {
+    return 'Зона на развитие';
+  }
+
+  if (zone === 'red') {
+    return 'Нужда от подкрепа';
+  }
+
+  if (zone === 'behavior_indicator' || zone === 'neutral') {
+    return rawInterpretation || 'Поведенчески индикатор';
+  }
+
+  return rawInterpretation || null;
+}
+
+function mapComfortOverviewChildren(rows, category) {
+  const childrenMap = new Map();
+
+  for (const row of rows || []) {
+    const childId = Number(row.child_id);
+
+    if (!childrenMap.has(childId)) {
+      const values = {};
+
+      for (const column of category.columns) {
+        if (column.type === 'text') {
+          values[column.actionCode] = {
+            type: 'text',
+            textValue: null,
+          };
+        } else {
+          values[column.actionCode] = {
+            type: 'score',
+            scoreValue: null,
+            zone: null,
+            interpretation: null,
+            note: null,
+          };
+        }
+      }
+
+      childrenMap.set(childId, {
+        id: childId,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        isActive: Boolean(row.is_active),
+        comfortProfile: {
+          hasProfile: Boolean(row.profile_id),
+          completedAt: row.completed_at || null,
+        },
+        values,
+      });
+    }
+
+    const child = childrenMap.get(childId);
+    const actionCode = row.action_code;
+    const column = category.columns.find((item) => item.actionCode === actionCode);
+
+    if (!column || !child.values[actionCode]) {
+      continue;
+    }
+
+    if (column.type === 'text') {
+      child.values[actionCode] = {
+        type: 'text',
+        textValue: row.text_value || null,
+      };
+      continue;
+    }
+
+    child.values[actionCode] = {
+      type: 'score',
+      scoreValue: row.score_value === null || row.score_value === undefined ? null : Number(row.score_value),
+      zone: row.zone || null,
+      interpretation: normalizeScoreInterpretation(row.zone, row.interpretation),
+      note: row.note || null,
+    };
+  }
+
+  return Array.from(childrenMap.values());
+}
+
 async function getMyGroups(filters, actor) {
   ensureCanUseCoachWorkspace(actor);
 
@@ -271,7 +416,47 @@ async function getAcademyChildren(filters, actor) {
   };
 }
 
+async function getGroupComfortZoneOverview(groupId, filters, actor) {
+  ensureCanUseCoachWorkspace(actor);
+
+  const group = await groupRepository.findByIdWithSeasonAndAcademy(groupId);
+
+  if (!group) {
+    throw new AppError(404, 'Групата не е намерена.');
+  }
+
+  await ensureCoachCanAccessGroup(actor, groupId);
+
+  const categoryKey = filters.category || 'creativity';
+  const category = COMFORT_OVERVIEW_CATEGORIES[categoryKey];
+
+  if (!category) {
+    throw new AppError(400, 'Невалидна категория за комфортните зони.');
+  }
+
+  const actionCodes = category.columns.map((column) => column.actionCode);
+  const rows = await coachWorkspaceRepository.getGroupComfortZoneOverviewRows(groupId, actionCodes);
+
+  return {
+    group: {
+      id: Number(group.id),
+      name: group.name,
+      academy: {
+        id: Number(group.academy_id),
+        name: group.academy_name,
+      },
+    },
+    category: {
+      key: categoryKey,
+      label: category.label,
+      columns: category.columns.map((column) => ({ ...column })),
+    },
+    children: mapComfortOverviewChildren(rows, category),
+  };
+}
+
 module.exports = {
   getMyGroups,
   getAcademyChildren,
+  getGroupComfortZoneOverview,
 };

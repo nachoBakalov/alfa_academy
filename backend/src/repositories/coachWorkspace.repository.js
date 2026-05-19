@@ -281,6 +281,88 @@ async function countAcademyChildrenForCoach(coachId, filters = {}) {
   return rows[0] ? Number(rows[0].total) : 0;
 }
 
+async function getGroupComfortZoneOverviewRows(groupId, actionCodes = []) {
+  if (!Array.isArray(actionCodes) || actionCodes.length === 0) {
+    return [];
+  }
+
+  const query = `
+    WITH selected_actions AS (
+      SELECT
+        a.id AS action_id,
+        a.code AS action_code,
+        array_position($2::text[], a.code) AS action_order
+      FROM comfort_zone_actions a
+      WHERE a.code = ANY($2::text[])
+    ),
+    active_children AS (
+      SELECT
+        c.id AS child_id,
+        c.first_name,
+        c.last_name,
+        c.is_active
+      FROM child_group_assignments cga
+      INNER JOIN children c ON c.id = cga.child_id
+      WHERE cga.group_id = $1
+        AND cga.ends_on IS NULL
+        AND c.is_active = TRUE
+    ),
+    latest_profiles AS (
+      SELECT DISTINCT ON (cp.child_id)
+        cp.id AS profile_id,
+        cp.child_id,
+        cp.source_submission_id,
+        cp.completed_at
+      FROM comfort_zone_profiles cp
+      INNER JOIN active_children ac ON ac.child_id = cp.child_id
+      ORDER BY cp.child_id ASC, cp.completed_at DESC, cp.id DESC
+    ),
+    favorite_sport_answers AS (
+      SELECT
+        lp.child_id,
+        qa.text_value
+      FROM latest_profiles lp
+      INNER JOIN questionnaire_answers qa ON qa.submission_id = lp.source_submission_id
+      INNER JOIN questionnaire_questions qq ON qq.id = qa.question_id
+      WHERE qq.code = 'favorite_sport'
+        AND qa.text_value IS NOT NULL
+        AND LENGTH(TRIM(qa.text_value)) > 0
+    )
+    SELECT
+      ac.child_id,
+      ac.first_name,
+      ac.last_name,
+      ac.is_active,
+      lp.profile_id,
+      lp.completed_at,
+      sa.action_code,
+      cs.score_value,
+      cs.zone,
+      cs.interpretation,
+      cs.note,
+      CASE
+        WHEN sa.action_code = 'favorite_sport' THEN fsa.text_value
+        ELSE NULL
+      END AS text_value
+    FROM active_children ac
+    CROSS JOIN selected_actions sa
+    LEFT JOIN latest_profiles lp ON lp.child_id = ac.child_id
+    LEFT JOIN comfort_zone_scores cs
+      ON cs.profile_id = lp.profile_id
+      AND cs.action_id = sa.action_id
+    LEFT JOIN favorite_sport_answers fsa ON fsa.child_id = ac.child_id
+    ORDER BY
+      ac.last_name ASC,
+      ac.first_name ASC,
+      ac.child_id ASC,
+      sa.action_order ASC,
+      sa.action_code ASC
+  `;
+
+  const { rows } = await pool.query(query, [groupId, actionCodes]);
+  return rows;
+}
+
 module.exports = {
   findCoachById,
   listCoachAcademies,
@@ -288,4 +370,5 @@ module.exports = {
   listCoachAvailableSeasons,
   listAcademyChildrenForCoach,
   countAcademyChildrenForCoach,
+  getGroupComfortZoneOverviewRows,
 };

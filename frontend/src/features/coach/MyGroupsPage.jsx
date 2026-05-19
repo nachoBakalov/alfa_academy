@@ -8,7 +8,7 @@ import LoadingScreen from '../../components/ui/LoadingScreen';
 import Select from '../../components/ui/Select';
 import coachWorkspaceService from './coachWorkspaceService';
 import groupService from '../groups/groupService';
-import AcademyChildrenPanel from './AcademyChildrenPanel';
+import GroupComfortZoneOverviewPanel from './GroupComfortZoneOverviewPanel';
 import MyGroupCard from './MyGroupCard';
 import { useAuth } from '../auth/AuthProvider';
 import { getApiErrorMessage } from '../../utils/errorMessage';
@@ -30,6 +30,34 @@ function mapStatusFilter(value) {
   return undefined;
 }
 
+function resolveSelectedGroupId(groups, { requestedGroupId, currentSelectedGroupId } = {}) {
+  const normalizedGroups = Array.isArray(groups) ? groups : [];
+
+  const findById = (id) =>
+    normalizedGroups.find((group) => Number(group.id) === Number(id)) || null;
+
+  if (requestedGroupId && findById(requestedGroupId)) {
+    return String(requestedGroupId);
+  }
+
+  if (currentSelectedGroupId && findById(currentSelectedGroupId)) {
+    return String(currentSelectedGroupId);
+  }
+
+  const activeGroups = normalizedGroups.filter((group) => group.isActive);
+
+  if (activeGroups.length === 1) {
+    return String(activeGroups[0].id);
+  }
+
+  if (activeGroups.length > 1) {
+    const primaryGroup = activeGroups.find((group) => group.isPrimary);
+    return String((primaryGroup || activeGroups[0]).id);
+  }
+
+  return normalizedGroups[0] ? String(normalizedGroups[0].id) : '';
+}
+
 export default function MyGroupsPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -37,6 +65,7 @@ export default function MyGroupsPage() {
   const isCoachUser = user?.role === 'coach';
 
   const queryCoachId = searchParams.get('coachId') || '';
+  const queryGroupId = searchParams.get('groupId') || '';
 
   const [workspace, setWorkspace] = useState({
     coach: null,
@@ -49,6 +78,8 @@ export default function MyGroupsPage() {
   const [coachOptions, setCoachOptions] = useState([]);
   const [selectedCoachId, setSelectedCoachId] = useState(queryCoachId);
   const [selectedAcademyId, setSelectedAcademyId] = useState('');
+  const [selectedGroupId, setSelectedGroupId] = useState(queryGroupId);
+  const [selectedComfortCategory, setSelectedComfortCategory] = useState('creativity');
   const [statusFilter, setStatusFilter] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -56,6 +87,10 @@ export default function MyGroupsPage() {
   useEffect(() => {
     setSelectedCoachId(queryCoachId);
   }, [queryCoachId]);
+
+  useEffect(() => {
+    setSelectedGroupId(queryGroupId);
+  }, [queryGroupId]);
 
   const loadCoachDirectory = useCallback(async () => {
     if (isCoachUser) {
@@ -137,6 +172,7 @@ export default function MyGroupsPage() {
     const value = event.target.value;
     setSelectedCoachId(value);
     setSelectedAcademyId('');
+    setSelectedGroupId('');
 
     const nextSearchParams = new URLSearchParams(searchParams);
 
@@ -145,6 +181,8 @@ export default function MyGroupsPage() {
     } else {
       nextSearchParams.delete('coachId');
     }
+
+    nextSearchParams.delete('groupId');
 
     setSearchParams(nextSearchParams, { replace: true });
   }
@@ -163,7 +201,60 @@ export default function MyGroupsPage() {
     [workspace.academies]
   );
 
+  const allGroups = useMemo(
+    () =>
+      workspace.academies.flatMap((academy) =>
+        academy.groups.map((group) => ({
+          ...group,
+          academyName: academy.name,
+        }))
+      ),
+    [workspace.academies]
+  );
+
+  const groupOptions = useMemo(
+    () =>
+      allGroups.map((group) => ({
+        value: String(group.id),
+        label: `${group.name}${group.isPrimary ? ' · Основна' : ''}`,
+      })),
+    [allGroups]
+  );
+
   const shouldSelectCoach = !isCoachUser && !selectedCoachId;
+
+  useEffect(() => {
+    if (shouldSelectCoach) {
+      if (selectedGroupId) {
+        setSelectedGroupId('');
+      }
+
+      return;
+    }
+
+    const resolvedGroupId = resolveSelectedGroupId(allGroups, {
+      requestedGroupId: queryGroupId,
+      currentSelectedGroupId: selectedGroupId,
+    });
+
+    if (resolvedGroupId !== selectedGroupId) {
+      setSelectedGroupId(resolvedGroupId);
+    }
+  }, [allGroups, queryGroupId, selectedGroupId, shouldSelectCoach]);
+
+  useEffect(() => {
+    const nextSearchParams = new URLSearchParams(searchParams);
+
+    if (!shouldSelectCoach && selectedGroupId) {
+      nextSearchParams.set('groupId', selectedGroupId);
+    } else {
+      nextSearchParams.delete('groupId');
+    }
+
+    if (nextSearchParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextSearchParams, { replace: true });
+    }
+  }, [searchParams, selectedGroupId, setSearchParams, shouldSelectCoach]);
 
   if (isLoading) {
     return <LoadingScreen fullPage={false} />;
@@ -192,7 +283,10 @@ export default function MyGroupsPage() {
           <Select
             label="Работна академия"
             value={selectedAcademyId}
-            onChange={(event) => setSelectedAcademyId(event.target.value)}
+            onChange={(event) => {
+              setSelectedAcademyId(event.target.value);
+              setSelectedGroupId('');
+            }}
             options={academyOptions}
             placeholder="Всички академии"
             disabled={shouldSelectCoach}
@@ -203,6 +297,14 @@ export default function MyGroupsPage() {
             onChange={(event) => setStatusFilter(event.target.value)}
             options={STATUS_OPTIONS}
             placeholder="Всички групи"
+          />
+          <Select
+            label="Избрана група"
+            value={selectedGroupId}
+            onChange={(event) => setSelectedGroupId(event.target.value)}
+            options={groupOptions}
+            placeholder={totalGroups ? 'Изберете група' : 'Няма групи'}
+            disabled={shouldSelectCoach || !totalGroups}
           />
         </div>
       </Card>
@@ -235,6 +337,8 @@ export default function MyGroupsPage() {
                     group={group}
                     academyName={academy.name}
                     canOpenManage={Boolean(user)}
+                    isSelected={String(group.id) === selectedGroupId}
+                    onSelect={(groupId) => setSelectedGroupId(String(groupId))}
                   />
                 ))}
               </div>
@@ -243,9 +347,10 @@ export default function MyGroupsPage() {
         : null}
 
       {!shouldSelectCoach ? (
-        <AcademyChildrenPanel
-          academyId={selectedAcademyId || undefined}
-          coachId={!isCoachUser && selectedCoachId ? Number(selectedCoachId) : undefined}
+        <GroupComfortZoneOverviewPanel
+          groupId={selectedGroupId ? Number(selectedGroupId) : null}
+          selectedCategory={selectedComfortCategory}
+          onCategoryChange={setSelectedComfortCategory}
         />
       ) : null}
     </div>

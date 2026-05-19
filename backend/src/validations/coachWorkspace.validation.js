@@ -53,7 +53,32 @@ const academyChildrenQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+const COMFORT_OVERVIEW_CATEGORY_KEYS = [
+  'creativity',
+  'life_and_technique',
+  'sport',
+  'social_contact',
+  'reading',
+];
+
+const comfortOverviewGroupParamsSchema = z.object({
+  groupId: z.coerce.number().int().positive(),
+});
+
+const comfortOverviewQuerySchema = z.object({
+  category: z.preprocess((value) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    return value;
+  }, z.enum(COMFORT_OVERVIEW_CATEGORY_KEYS).default('creativity')),
+});
+
 module.exports = {
   myGroupsQuerySchema,
   academyChildrenQuerySchema,
+  COMFORT_OVERVIEW_CATEGORY_KEYS,
+  comfortOverviewGroupParamsSchema,
+  comfortOverviewQuerySchema,
 };

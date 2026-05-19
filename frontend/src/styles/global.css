@@ -770,6 +770,11 @@ a:focus-visible {
   border: 1px solid color-mix(in oklab, var(--color-border), #c9decf 50%);
 }
 
+.my-group-card-selected {
+  border-color: color-mix(in oklab, var(--color-primary), white 20%);
+  background: color-mix(in oklab, var(--color-surface), #eaf5ed 28%);
+}
+
 .my-group-card-header {
   display: flex;
   justify-content: space-between;
@@ -841,6 +846,55 @@ a:focus-visible {
 .coach-panel-filters {
   display: grid;
   gap: 0.65rem;
+}
+
+.coach-group-context {
+  margin: 0.45rem 0 0;
+  color: var(--color-text-muted);
+}
+
+.coach-comfort-filter-buttons {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.coach-comfort-info-message {
+  margin: 0.8rem 0;
+  border: 1px solid #d7e7f7;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  background: #edf5ff;
+  color: #2f527b;
+}
+
+.comfort-overview-cell {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.comfort-overview-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.comfort-overview-score-row strong {
+  color: var(--color-text);
+}
+
+.comfort-overview-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comfort-overview-note span {
+  color: var(--color-text);
+  font-weight: 600;
 }
 
 .group-children-actions {

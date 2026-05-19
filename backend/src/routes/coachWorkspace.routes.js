@@ -9,5 +9,9 @@ router.use(requireRoles('super_admin', 'admin', 'manager', 'coach'));
 
 router.get('/my-groups', asyncHandler(coachWorkspaceController.getMyGroups));
 router.get('/academy-children', asyncHandler(coachWorkspaceController.getAcademyChildren));
+router.get(
+  '/groups/:groupId/comfort-zone-overview',
+  asyncHandler(coachWorkspaceController.getGroupComfortZoneOverview)
+);
 
 module.exports = router;

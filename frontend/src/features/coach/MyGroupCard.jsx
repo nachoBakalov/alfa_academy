@@ -30,17 +30,24 @@ function formatWeekly(weeklySocial) {
   return `${formatShortDate(weeklySocial.weekStartDate)}: ${weeklySocial.weeklyAlphaBalls} алфа · ${statusLabel}`;
 }
 
-export default function MyGroupCard({ group, academyName, canOpenManage }) {
+export default function MyGroupCard({
+  group,
+  academyName,
+  canOpenManage,
+  isSelected = false,
+  onSelect,
+}) {
   const navigate = useNavigate();
 
   return (
-    <Card className="my-group-card">
+    <Card className={`my-group-card ${isSelected ? 'my-group-card-selected' : ''}`}>
       <div className="my-group-card-header">
         <div>
           <h3>{group.name}</h3>
           <p>{academyName}</p>
         </div>
         <div className="my-group-card-badges">
+          {isSelected ? <Badge tone="info">Избрана</Badge> : null}
           {group.isPrimary ? <Badge tone="success">Основна група</Badge> : null}
           <Badge tone={group.isActive ? 'success' : 'neutral'}>
             {group.isActive ? 'Активна група' : 'Неактивна група'}
@@ -73,6 +80,11 @@ export default function MyGroupCard({ group, academyName, canOpenManage }) {
       </div>
 
       <div className="my-group-actions no-print">
+        {onSelect ? (
+          <Button variant={isSelected ? 'primary' : 'secondary'} onClick={() => onSelect(group.id)}>
+            {isSelected ? 'Избрана група' : 'Избери група'}
+          </Button>
+        ) : null}
         <Button variant="secondary" onClick={() => navigate(`/children?groupId=${group.id}`)}>
           Деца
         </Button>

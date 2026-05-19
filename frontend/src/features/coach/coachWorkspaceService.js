@@ -99,6 +99,53 @@ function normalizeAcademyChild(child = {}) {
   };
 }
 
+function normalizeComfortOverviewColumn(column = {}) {
+  return {
+    actionCode: column.actionCode || '',
+    label: column.label || '',
+    type: column.type === 'text' ? 'text' : 'score',
+  };
+}
+
+function normalizeComfortOverviewValue(value = {}) {
+  if (value.type === 'text') {
+    return {
+      type: 'text',
+      textValue: value.textValue || null,
+    };
+  }
+
+  return {
+    type: 'score',
+    scoreValue:
+      value.scoreValue === null || value.scoreValue === undefined ? null : Number(value.scoreValue),
+    zone: value.zone || null,
+    interpretation: value.interpretation || null,
+    note: value.note || null,
+  };
+}
+
+function normalizeComfortOverviewChild(child = {}) {
+  const values = Object.fromEntries(
+    Object.entries(child.values || {}).map(([actionCode, value]) => [
+      actionCode,
+      normalizeComfortOverviewValue(value || {}),
+    ])
+  );
+
+  return {
+    id: Number(child.id),
+    firstName: child.firstName || '',
+    lastName: child.lastName || '',
+    isActive: Boolean(child.isActive),
+    comfortProfile: {
+      hasProfile: Boolean(child.comfortProfile?.hasProfile),
+      completedAt: child.comfortProfile?.completedAt || null,
+    },
+    values,
+  };
+}
+
 async function getMyGroups(params = {}) {
   const { data } = await apiClient.get('/coach-workspace/my-groups', {
     params: sanitizeParams(params),
@@ -136,7 +183,41 @@ async function getAcademyChildren(params = {}) {
   };
 }
 
+async function getGroupComfortZoneOverview(groupId, params = {}) {
+  const { data } = await apiClient.get(`/coach-workspace/groups/${groupId}/comfort-zone-overview`, {
+    params: sanitizeParams(params),
+  });
+
+  return {
+    group: data.group
+      ? {
+          id: Number(data.group.id),
+          name: data.group.name || '',
+          academy: data.group.academy
+            ? {
+                id: Number(data.group.academy.id),
+                name: data.group.academy.name || '',
+              }
+            : null,
+        }
+      : null,
+    category: data.category
+      ? {
+          key: data.category.key || 'creativity',
+          label: data.category.label || 'Креативност',
+          columns: (data.category.columns || []).map(normalizeComfortOverviewColumn),
+        }
+      : {
+          key: 'creativity',
+          label: 'Креативност',
+          columns: [],
+        },
+    children: (data.children || []).map(normalizeComfortOverviewChild),
+  };
+}
+
 export default {
   getMyGroups,
   getAcademyChildren,
+  getGroupComfortZoneOverview,
 };
