@@ -22,12 +22,23 @@ async function ensureCoachCanAccessChild(actor, childId) {
 }
 
 function buildQuestionnaireStatus(row) {
+  const latestEmailDelivery =
+    row && row.delivery_status
+      ? {
+          status: row.delivery_status,
+          recipient: row.delivery_recipient,
+          sentAt: row.delivery_sent_at || row.delivery_created_at,
+          createdAt: row.delivery_created_at,
+        }
+      : null;
+
   if (!row) {
     return {
       status: null,
       expiresAt: null,
       submittedAt: null,
       link: null,
+      latestEmailDelivery: null,
     };
   }
 
@@ -43,6 +54,7 @@ function buildQuestionnaireStatus(row) {
       effectiveStatus === 'pending' && row.token
         ? questionnaireTokenService.buildQuestionnaireLink(row.token)
         : null,
+    latestEmailDelivery,
   };
 }
 
@@ -151,6 +163,67 @@ function buildComfortZoneSectionTree(scores) {
     }));
 }
 
+function mapComfortZoneTextAnswer(answerRow) {
+  return {
+    questionCode: answerRow.question_code,
+    label: answerRow.label,
+    textValue: answerRow.text_value,
+    sectionCode: answerRow.sphere_code || null,
+    sectionName: answerRow.sphere_name || null,
+    subsectionCode: answerRow.subsphere_code || null,
+    subsectionName: answerRow.subsphere_name || null,
+  };
+}
+
+function attachTextAnswersToSections(sections, textAnswers) {
+  const normalizedSections = (sections || []).map((section) => ({
+    ...section,
+    subsections: (section.subsections || []).map((subsection) => ({
+      ...subsection,
+      textAnswers: (subsection.textAnswers || []).map((item) => ({ ...item })),
+    })),
+  }));
+
+  for (const textAnswer of textAnswers || []) {
+    if (!textAnswer.sectionCode) {
+      continue;
+    }
+
+    const section = normalizedSections.find((item) => item.code === textAnswer.sectionCode);
+
+    if (!section) {
+      continue;
+    }
+
+    let targetSubsection = textAnswer.subsectionCode
+      ? section.subsections.find((item) => item.code === textAnswer.subsectionCode)
+      : null;
+
+    if (!targetSubsection) {
+      targetSubsection = section.subsections.find((item) => item.code === 'general');
+    }
+
+    if (!targetSubsection) {
+      targetSubsection = {
+        code: 'general',
+        name: 'Общо',
+        scores: [],
+        textAnswers: [],
+      };
+
+      section.subsections.push(targetSubsection);
+    }
+
+    targetSubsection.textAnswers.push({
+      questionCode: textAnswer.questionCode,
+      label: textAnswer.label,
+      textValue: textAnswer.textValue,
+    });
+  }
+
+  return normalizedSections;
+}
+
 async function getChildProfile(childId, actor) {
   ensureCanViewChildProfile(actor);
 
@@ -185,9 +258,11 @@ async function getChildProfile(childId, actor) {
 
   if (latestComfortProfile) {
     const scores = await childProfileRepository.getComfortZoneScores(latestComfortProfile.id);
-    const textAnswers = await childProfileRepository.getComfortZoneTextAnswers(
+    const textAnswerRows = await childProfileRepository.getComfortZoneTextAnswers(
       latestComfortProfile.source_submission_id
     );
+    const textAnswers = textAnswerRows.map(mapComfortZoneTextAnswer);
+    const sections = attachTextAnswersToSections(buildComfortZoneSectionTree(scores), textAnswers);
 
     comfortZone = {
       hasProfile: true,
@@ -195,12 +270,8 @@ async function getChildProfile(childId, actor) {
       completedByType: latestComfortProfile.completed_by_type,
       completedByName: latestComfortProfile.completed_by_name,
       summary: buildComfortZoneSummary(scores),
-      sections: buildComfortZoneSectionTree(scores),
-      textAnswers: textAnswers.map((item) => ({
-        questionCode: item.question_code,
-        label: item.label,
-        textValue: item.text_value,
-      })),
+      sections,
+      textAnswers,
     };
   }
 
@@ -248,4 +319,5 @@ module.exports = {
   buildQuestionnaireStatus,
   buildComfortZoneSectionTree,
   buildComfortZoneSummary,
+  attachTextAnswersToSections,
 };

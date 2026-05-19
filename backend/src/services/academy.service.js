@@ -65,6 +65,67 @@ async function getAcademyById(id, actor) {
   return toAcademyResponse(academy);
 }
 
+function normalizeQuestionnaireStatus(status, expiresAt) {
+  if (!status) {
+    return null;
+  }
+
+  if (status === 'pending' && expiresAt) {
+    const parsed = new Date(expiresAt);
+
+    if (!Number.isNaN(parsed.getTime()) && parsed.getTime() < Date.now()) {
+      return 'expired';
+    }
+  }
+
+  return status;
+}
+
+async function listAcademyChildren(academyId, filters, actor) {
+  const academy = await academyRepository.findById(academyId);
+
+  if (!academy) {
+    throw new AppError(404, 'Academy not found');
+  }
+
+  await ensureCanViewAcademy(actor, academyId);
+
+  const [rows, total] = await Promise.all([
+    academyRepository.listAcademyChildren(academyId, filters),
+    academyRepository.countAcademyChildren(academyId, filters),
+  ]);
+
+  return {
+    children: rows.map((row) => ({
+      id: Number(row.id),
+      firstName: row.first_name,
+      lastName: row.last_name,
+      isActive: Boolean(row.is_active),
+      currentGroup: row.current_group_id
+        ? {
+            id: Number(row.current_group_id),
+            name: row.current_group_name,
+          }
+        : null,
+      academy: {
+        id: Number(row.academy_id),
+        name: row.academy_name,
+      },
+      questionnaire: {
+        status: normalizeQuestionnaireStatus(
+          row.questionnaire_status,
+          row.questionnaire_expires_at
+        ),
+      },
+    })),
+    pagination: {
+      limit: filters.limit,
+      offset: filters.offset,
+      total,
+    },
+  };
+}
+
 async function createAcademy(payload, context) {
   ensureCanManageAcademies(context.actor);
 
@@ -170,6 +231,7 @@ async function updateAcademyStatus(id, payload, context) {
 module.exports = {
   listAcademies,
   getAcademyById,
+  listAcademyChildren,
   createAcademy,
   updateAcademy,
   updateAcademyStatus,

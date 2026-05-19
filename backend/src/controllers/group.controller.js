@@ -5,6 +5,7 @@ const {
   createGroupSchema,
   updateGroupSchema,
   updateGroupStatusSchema,
+  importChildrenSchema,
 } = require('../validations/group.validation');
 
 function getRequestContext(req) {
@@ -47,10 +48,18 @@ async function updateGroupStatus(req, res) {
   res.status(200).json({ group });
 }
 
+async function importChildren(req, res) {
+  const { id } = groupIdParamSchema.parse(req.params);
+  const payload = importChildrenSchema.parse(req.body);
+  const result = await groupService.importChildren(id, payload, getRequestContext(req));
+  res.status(200).json(result);
+}
+
 module.exports = {
   listGroups,
   getGroupById,
   createGroup,
   updateGroup,
   updateGroupStatus,
+  importChildren,
 };

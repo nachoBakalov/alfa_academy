@@ -1,6 +1,7 @@
 const AppError = require('../utils/AppError');
 const academyRepository = require('../repositories/academy.repository');
 const seasonRepository = require('../repositories/season.repository');
+const childRepository = require('../repositories/child.repository');
 const auditLogRepository = require('../repositories/auditLog.repository');
 
 function toSeasonResponse(season) {
@@ -34,6 +35,43 @@ function ensureCanManageSeasons(actor) {
   }
 }
 
+function toQuestionnairePreview(questionnaire) {
+  if (!questionnaire || !questionnaire.status || !questionnaire.expires_at) {
+    return null;
+  }
+
+  return {
+    status: questionnaire.status,
+    expiresAt: questionnaire.expires_at,
+  };
+}
+
+function toSeasonChildResponse(child) {
+  return {
+    id: Number(child.id),
+    firstName: child.first_name,
+    lastName: child.last_name,
+    birthDate: child.birth_date,
+    gender: child.gender,
+    isActive: Boolean(child.is_active),
+    parentName: child.parent_name,
+    parentEmail: child.parent_email,
+    parentPhone: child.parent_phone,
+    currentGroup: child.current_group_id
+      ? {
+          id: Number(child.current_group_id),
+          name: child.current_group_name,
+        }
+      : null,
+    questionnaire: toQuestionnairePreview({
+      status: child.questionnaire_status,
+      expires_at: child.questionnaire_expires_at,
+    }),
+    createdAt: child.created_at,
+    updatedAt: child.updated_at,
+  };
+}
+
 async function ensureCanViewSeason(actor, seasonId) {
   ensureCanViewSeasons(actor);
 
@@ -60,6 +98,40 @@ async function listSeasons(filters, actor) {
 
   return {
     seasons: seasons.map(toSeasonResponse),
+    pagination: {
+      limit: filters.limit,
+      offset: filters.offset,
+      total,
+    },
+  };
+}
+
+async function listSeasonChildren(seasonId, filters, actor) {
+  const season = await seasonRepository.findByIdWithAcademy(seasonId);
+
+  if (!season) {
+    throw new AppError(404, 'Season not found');
+  }
+
+  await ensureCanViewSeason(actor, seasonId);
+
+  const childFilters = {
+    groupId: filters.groupId,
+    seasonId,
+    isActive: filters.isActive,
+    search: filters.search,
+    limit: filters.limit,
+    offset: filters.offset,
+  };
+
+  const [children, total] = await Promise.all([
+    childRepository.listChildren(childFilters, actor),
+    childRepository.countChildren(childFilters, actor),
+  ]);
+
+  return {
+    season: toSeasonResponse(season),
+    children: children.map(toSeasonChildResponse),
     pagination: {
       limit: filters.limit,
       offset: filters.offset,
@@ -214,6 +286,7 @@ async function updateSeasonStatus(id, payload, context) {
 
 module.exports = {
   listSeasons,
+  listSeasonChildren,
   getSeasonById,
   createSeason,
   updateSeason,

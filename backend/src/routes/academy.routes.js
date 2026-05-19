@@ -8,6 +8,7 @@ const router = Router();
 router.use(requireRoles('super_admin', 'admin', 'manager', 'coach'));
 
 router.get('/', asyncHandler(academyController.listAcademies));
+router.get('/:id/children', asyncHandler(academyController.listAcademyChildren));
 router.get('/:id', asyncHandler(academyController.getAcademyById));
 router.post('/', asyncHandler(academyController.createAcademy));
 router.patch('/:id', asyncHandler(academyController.updateAcademy));

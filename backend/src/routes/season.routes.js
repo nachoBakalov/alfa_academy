@@ -8,6 +8,7 @@ const router = Router();
 router.use(requireRoles('super_admin', 'admin', 'manager', 'coach'));
 
 router.get('/', asyncHandler(seasonController.listSeasons));
+router.get('/:id/children', asyncHandler(seasonController.listSeasonChildren));
 router.get('/:id', asyncHandler(seasonController.getSeasonById));
 router.post('/', asyncHandler(seasonController.createSeason));
 router.patch('/:id', asyncHandler(seasonController.updateSeason));

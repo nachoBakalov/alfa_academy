@@ -1,6 +1,7 @@
 const seasonService = require('../services/season.service');
 const {
   listSeasonsQuerySchema,
+  seasonChildrenQuerySchema,
   seasonIdParamSchema,
   createSeasonSchema,
   updateSeasonSchema,
@@ -27,6 +28,13 @@ async function getSeasonById(req, res) {
   res.status(200).json({ season });
 }
 
+async function listSeasonChildren(req, res) {
+  const { id } = seasonIdParamSchema.parse(req.params);
+  const filters = seasonChildrenQuerySchema.parse(req.query || {});
+  const result = await seasonService.listSeasonChildren(id, filters, req.user);
+  res.status(200).json(result);
+}
+
 async function createSeason(req, res) {
   const payload = createSeasonSchema.parse(req.body);
   const season = await seasonService.createSeason(payload, getRequestContext(req));
@@ -49,6 +57,7 @@ async function updateSeasonStatus(req, res) {
 
 module.exports = {
   listSeasons,
+  listSeasonChildren,
   getSeasonById,
   createSeason,
   updateSeason,

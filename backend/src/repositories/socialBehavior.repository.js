@@ -161,6 +161,35 @@ async function getDailySummary(groupId, date, client) {
   return rows[0] || null;
 }
 
+async function getDailySummariesForGroupRange(groupId, startDate, endDate, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    SELECT
+      id,
+      group_id,
+      summary_date,
+      is_active_day,
+      number_of_children,
+      internal_daily_maximum,
+      external_daily_maximum,
+      daily_social_result,
+      green_children_count,
+      orange_children_count,
+      red_children_count,
+      calculated_at,
+      created_at,
+      updated_at
+    FROM daily_social_summaries
+    WHERE group_id = $1
+      AND summary_date BETWEEN $2::date AND $3::date
+    ORDER BY summary_date ASC
+  `;
+
+  const { rows } = await executor.query(query, [groupId, startDate, endDate]);
+  return rows;
+}
+
 async function upsertDailyEvaluation(data, client) {
   const executor = getExecutor(client);
 
@@ -293,6 +322,99 @@ async function upsertDailySummary(data, client) {
   return rows[0] || null;
 }
 
+async function getWeeklySummary(groupId, weekStartDate, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    SELECT
+      id,
+      group_id,
+      week_start_date,
+      week_end_date,
+      active_days_count,
+      number_of_children,
+      weekly_maximum,
+      weekly_social_result,
+      weekly_percentage,
+      weekly_alpha_balls,
+      weekly_status,
+      calculated_at,
+      created_at,
+      updated_at
+    FROM weekly_social_summaries
+    WHERE group_id = $1
+      AND week_start_date = $2::date
+    LIMIT 1
+  `;
+
+  const { rows } = await executor.query(query, [groupId, weekStartDate]);
+  return rows[0] || null;
+}
+
+async function upsertWeeklySummary(data, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    INSERT INTO weekly_social_summaries (
+      group_id,
+      week_start_date,
+      week_end_date,
+      active_days_count,
+      number_of_children,
+      weekly_maximum,
+      weekly_social_result,
+      weekly_percentage,
+      weekly_alpha_balls,
+      weekly_status,
+      calculated_at
+    )
+    VALUES ($1, $2::date, $3::date, $4, $5, $6, $7, $8, $9, $10, NOW())
+    ON CONFLICT (group_id, week_start_date)
+    DO UPDATE SET
+      week_end_date = EXCLUDED.week_end_date,
+      active_days_count = EXCLUDED.active_days_count,
+      number_of_children = EXCLUDED.number_of_children,
+      weekly_maximum = EXCLUDED.weekly_maximum,
+      weekly_social_result = EXCLUDED.weekly_social_result,
+      weekly_percentage = EXCLUDED.weekly_percentage,
+      weekly_alpha_balls = EXCLUDED.weekly_alpha_balls,
+      weekly_status = EXCLUDED.weekly_status,
+      calculated_at = NOW(),
+      updated_at = NOW()
+    RETURNING
+      id,
+      group_id,
+      week_start_date,
+      week_end_date,
+      active_days_count,
+      number_of_children,
+      weekly_maximum,
+      weekly_social_result,
+      weekly_percentage,
+      weekly_alpha_balls,
+      weekly_status,
+      calculated_at,
+      created_at,
+      updated_at
+  `;
+
+  const values = [
+    data.groupId,
+    data.weekStartDate,
+    data.weekEndDate,
+    data.activeDaysCount,
+    data.numberOfChildren,
+    data.weeklyMaximum,
+    data.weeklySocialResult,
+    data.weeklyPercentage,
+    data.weeklyAlphaBalls,
+    data.weeklyStatus,
+  ];
+
+  const { rows } = await executor.query(query, values);
+  return rows[0] || null;
+}
+
 async function coachCanAccessGroup(coachId, groupId) {
   return groupRepository.coachCanAccessGroup(coachId, groupId);
 }
@@ -304,8 +426,11 @@ module.exports = {
   getChildrenForGroupOnDate,
   getDailyEvaluationsForGroupDate,
   getDailySummary,
+  getDailySummariesForGroupRange,
   upsertDailyEvaluation,
   getEvaluationsForGroupDate,
   upsertDailySummary,
+  getWeeklySummary,
+  upsertWeeklySummary,
   coachCanAccessGroup,
 };

@@ -3,10 +3,18 @@ const { withTransaction } = require('../db/postgres');
 const userRepository = require('../repositories/user.repository');
 const groupRepository = require('../repositories/group.repository');
 const coachGroupRepository = require('../repositories/coachGroup.repository');
+const coachAcademyRepository = require('../repositories/coachAcademy.repository');
+const coachSeasonRepository = require('../repositories/coachSeason.repository');
 const auditLogRepository = require('../repositories/auditLog.repository');
 
 function ensureCanAssignCoaches(actor) {
-  if (!['super_admin', 'admin'].includes(actor.role)) {
+  if (!['super_admin', 'admin', 'manager'].includes(actor.role)) {
+    throw new AppError(403, 'Forbidden');
+  }
+}
+
+function ensureCanViewCoachDirectory(actor) {
+  if (!['super_admin', 'admin', 'manager'].includes(actor.role)) {
     throw new AppError(403, 'Forbidden');
   }
 }
@@ -44,6 +52,43 @@ function toCoachResponse(row) {
     isPrimary: row.is_primary,
     assignedAt: row.assigned_at,
     unassignedAt: row.unassigned_at,
+  };
+}
+
+function toCoachDirectoryItem(row) {
+  return {
+    id: Number(row.id),
+    email: row.email,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    phone: row.phone,
+    isActive: Boolean(row.is_active),
+  };
+}
+
+async function listCoachDirectory(filters, actor) {
+  ensureCanViewCoachDirectory(actor);
+
+  const queryFilters = {
+    role: 'coach',
+    isActive: true,
+    search: filters.search,
+    limit: filters.limit,
+    offset: filters.offset,
+  };
+
+  const [coaches, total] = await Promise.all([
+    userRepository.listUsers(queryFilters),
+    userRepository.countUsers(queryFilters),
+  ]);
+
+  return {
+    coaches: coaches.map(toCoachDirectoryItem),
+    pagination: {
+      limit: filters.limit,
+      offset: filters.offset,
+      total,
+    },
   };
 }
 
@@ -91,29 +136,41 @@ async function assignCoachToGroup(groupId, payload, context) {
     throw new AppError(409, 'Coach is already assigned to this group');
   }
 
-  let assignment;
-
-  if (payload.isPrimary) {
-    assignment = await withTransaction(async (client) => {
+  const assignment = await withTransaction(async (client) => {
+    if (payload.isPrimary) {
       await coachGroupRepository.clearPrimaryCoachForGroup(groupId, payload.coachId, client);
-      return coachGroupRepository.assignCoachToGroup(
-        {
-          coachId: payload.coachId,
-          groupId,
-          isPrimary: true,
-          createdBy: context.actor.id,
-        },
-        client
-      );
-    });
-  } else {
-    assignment = await coachGroupRepository.assignCoachToGroup({
-      coachId: payload.coachId,
-      groupId,
-      isPrimary: false,
-      createdBy: context.actor.id,
-    });
-  }
+    }
+
+    const createdAssignment = await coachGroupRepository.assignCoachToGroup(
+      {
+        coachId: payload.coachId,
+        groupId,
+        isPrimary: Boolean(payload.isPrimary),
+        createdBy: context.actor.id,
+      },
+      client
+    );
+
+    await coachAcademyRepository.ensureActiveAssignment(
+      {
+        coachId: payload.coachId,
+        academyId: Number(group.academy_id),
+        createdBy: context.actor.id,
+      },
+      client
+    );
+
+    await coachSeasonRepository.ensureActiveAssignment(
+      {
+        coachId: payload.coachId,
+        seasonId: Number(group.season_id),
+        createdBy: context.actor.id,
+      },
+      client
+    );
+
+    return createdAssignment;
+  });
 
   await auditLogRepository.createAuditLog({
     actorUserId: context.actor.id,
@@ -217,6 +274,7 @@ async function unassignCoachFromGroup(groupId, coachId, context) {
 }
 
 module.exports = {
+  listCoachDirectory,
   listCoachesForGroup,
   assignCoachToGroup,
   updateCoachAssignment,

@@ -11,6 +11,39 @@ SET
   name = EXCLUDED.name,
   description = EXCLUDED.description;
 
+INSERT INTO sports_challenge_definitions (
+  code,
+  name,
+  description,
+  unit,
+  result_direction,
+  target_type,
+  default_target_reduction_percent,
+  default_fail_safe_threshold_percent,
+  is_active
+)
+VALUES (
+  'long_jump',
+  'Дълъг скок',
+  'Групово спортно предизвикателство с индивидуален таргет -10%, групов таргет и fail-safe условие.',
+  'cm',
+  'higher_is_better',
+  'maintain_with_tolerance',
+  0.1000,
+  0.5000,
+  TRUE
+)
+ON CONFLICT (code) DO UPDATE
+SET
+  name = EXCLUDED.name,
+  description = EXCLUDED.description,
+  unit = EXCLUDED.unit,
+  result_direction = EXCLUDED.result_direction,
+  target_type = EXCLUDED.target_type,
+  default_target_reduction_percent = EXCLUDED.default_target_reduction_percent,
+  default_fail_safe_threshold_percent = EXCLUDED.default_fail_safe_threshold_percent,
+  is_active = EXCLUDED.is_active;
+
 INSERT INTO questionnaires (code, version, title, description, is_active)
 VALUES (
   'comfort_zone_parent_v1',

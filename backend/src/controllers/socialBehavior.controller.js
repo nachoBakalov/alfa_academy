@@ -2,6 +2,8 @@ const socialBehaviorService = require('../services/socialBehavior.service');
 const {
   groupIdParamSchema,
   dailyQuerySchema,
+  weeklyQuerySchema,
+  recalculateWeeklySchema,
   updateActiveDaysSchema,
   saveDailyEvaluationsSchema,
 } = require('../validations/socialBehavior.validation');
@@ -67,10 +69,38 @@ async function getDailySummary(req, res) {
   res.status(200).json(result);
 }
 
+async function getWeeklySummary(req, res) {
+  const { groupId } = groupIdParamSchema.parse(req.params);
+  const { weekStartDate } = weeklyQuerySchema.parse(req.query);
+
+  const result = await socialBehaviorService.getWeeklySummary(
+    groupId,
+    weekStartDate,
+    req.user
+  );
+
+  res.status(200).json(result);
+}
+
+async function recalculateWeeklySummary(req, res) {
+  const { groupId } = groupIdParamSchema.parse(req.params);
+  const payload = recalculateWeeklySchema.parse(req.body);
+
+  const result = await socialBehaviorService.recalculateWeeklySummary(
+    groupId,
+    payload,
+    getRequestContext(req)
+  );
+
+  res.status(200).json(result);
+}
+
 module.exports = {
   getGroupActiveDays,
   updateGroupActiveDays,
   getDailyEvaluationScreen,
   saveDailyEvaluations,
   getDailySummary,
+  getWeeklySummary,
+  recalculateWeeklySummary,
 };

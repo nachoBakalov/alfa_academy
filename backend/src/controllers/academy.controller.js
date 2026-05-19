@@ -2,6 +2,7 @@ const academyService = require('../services/academy.service');
 const {
   listAcademiesQuerySchema,
   academyIdParamSchema,
+  academyChildrenQuerySchema,
   createAcademySchema,
   updateAcademySchema,
   updateAcademyStatusSchema,
@@ -25,6 +26,13 @@ async function getAcademyById(req, res) {
   const { id } = academyIdParamSchema.parse(req.params);
   const academy = await academyService.getAcademyById(id, req.user);
   res.status(200).json({ academy });
+}
+
+async function listAcademyChildren(req, res) {
+  const { id } = academyIdParamSchema.parse(req.params);
+  const filters = academyChildrenQuerySchema.parse(req.query || {});
+  const result = await academyService.listAcademyChildren(id, filters, req.user);
+  res.status(200).json(result);
 }
 
 async function createAcademy(req, res) {
@@ -55,6 +63,7 @@ async function updateAcademyStatus(req, res) {
 module.exports = {
   listAcademies,
   getAcademyById,
+  listAcademyChildren,
   createAcademy,
   updateAcademy,
   updateAcademyStatus,

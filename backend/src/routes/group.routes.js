@@ -8,11 +8,13 @@ const router = Router();
 
 router.use(requireRoles('super_admin', 'admin', 'manager', 'coach'));
 
+router.get('/coaches/directory', asyncHandler(coachGroupController.listCoachDirectory));
 router.get('/', asyncHandler(groupController.listGroups));
 router.get('/:id', asyncHandler(groupController.getGroupById));
 router.post('/', asyncHandler(groupController.createGroup));
 router.patch('/:id', asyncHandler(groupController.updateGroup));
 router.patch('/:id/status', asyncHandler(groupController.updateGroupStatus));
+router.post('/:id/import-children', asyncHandler(groupController.importChildren));
 
 router.get('/:id/coaches', asyncHandler(coachGroupController.listCoachesForGroup));
 router.post('/:id/coaches', asyncHandler(coachGroupController.assignCoachToGroup));

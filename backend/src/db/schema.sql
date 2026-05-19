@@ -108,10 +108,37 @@ CREATE TABLE IF NOT EXISTS coach_groups (
   )
 );
 
+CREATE TABLE IF NOT EXISTS coach_academies (
+  id BIGSERIAL PRIMARY KEY,
+  coach_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  academy_id BIGINT NOT NULL REFERENCES academies(id) ON DELETE RESTRICT,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  unassigned_at TIMESTAMPTZ NULL,
+  created_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT coach_academies_unassigned_after_assigned_chk CHECK (
+    unassigned_at IS NULL OR unassigned_at >= assigned_at
+  )
+);
+
+CREATE TABLE IF NOT EXISTS coach_seasons (
+  id BIGSERIAL PRIMARY KEY,
+  coach_id BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE RESTRICT,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  unassigned_at TIMESTAMPTZ NULL,
+  created_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT coach_seasons_unassigned_after_assigned_chk CHECK (
+    unassigned_at IS NULL OR unassigned_at >= assigned_at
+  )
+);
+
 CREATE TABLE IF NOT EXISTS child_group_assignments (
   id BIGSERIAL PRIMARY KEY,
   child_id BIGINT NOT NULL REFERENCES children(id) ON DELETE RESTRICT,
   group_id BIGINT NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
+  season_id BIGINT NOT NULL REFERENCES seasons(id) ON DELETE RESTRICT,
   starts_on DATE NOT NULL,
   ends_on DATE NULL,
   created_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
@@ -120,6 +147,31 @@ CREATE TABLE IF NOT EXISTS child_group_assignments (
     ends_on IS NULL OR ends_on >= starts_on
   )
 );
+
+DO $$
+BEGIN
+  ALTER TABLE child_group_assignments
+  ADD COLUMN IF NOT EXISTS season_id BIGINT REFERENCES seasons(id) ON DELETE RESTRICT;
+
+  UPDATE child_group_assignments cga
+  SET season_id = g.season_id
+  FROM groups g
+  WHERE cga.group_id = g.id
+    AND cga.season_id IS NULL;
+
+  ALTER TABLE child_group_assignments
+  ALTER COLUMN season_id SET NOT NULL;
+END $$;
+
+INSERT INTO coach_seasons (coach_id, season_id, created_by)
+SELECT DISTINCT
+  cg.coach_id,
+  g.season_id,
+  cg.created_by
+FROM coach_groups cg
+INNER JOIN groups g ON g.id = cg.group_id
+WHERE cg.unassigned_at IS NULL
+ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS group_social_active_days (
   id BIGSERIAL PRIMARY KEY,
@@ -226,6 +278,183 @@ CREATE TABLE IF NOT EXISTS weekly_social_summaries (
   CONSTRAINT weekly_social_summaries_group_week_unique UNIQUE (group_id, week_start_date)
 );
 
+CREATE TABLE IF NOT EXISTS sports_challenge_definitions (
+  id BIGSERIAL PRIMARY KEY,
+  code VARCHAR(100) NOT NULL UNIQUE,
+  name VARCHAR(150) NOT NULL,
+  description TEXT NULL,
+  unit VARCHAR(30) NOT NULL DEFAULT 'cm',
+  result_direction VARCHAR(50) NOT NULL DEFAULT 'higher_is_better',
+  target_type VARCHAR(50) NOT NULL DEFAULT 'maintain_with_tolerance',
+  default_target_reduction_percent NUMERIC(5,4) NOT NULL DEFAULT 0.1000,
+  default_fail_safe_threshold_percent NUMERIC(5,4) NOT NULL DEFAULT 0.5000,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT sports_challenge_definitions_result_direction_chk CHECK (
+    result_direction IN ('higher_is_better', 'lower_is_better')
+  ),
+  CONSTRAINT sports_challenge_definitions_target_type_chk CHECK (
+    target_type IN ('maintain_with_tolerance')
+  ),
+  CONSTRAINT sports_challenge_definitions_target_reduction_percent_chk CHECK (
+    default_target_reduction_percent >= 0 AND default_target_reduction_percent <= 1
+  ),
+  CONSTRAINT sports_challenge_definitions_fail_safe_threshold_percent_chk CHECK (
+    default_fail_safe_threshold_percent >= 0 AND default_fail_safe_threshold_percent <= 1
+  )
+);
+
+DO $$
+BEGIN
+  ALTER TABLE sports_challenge_definitions
+  DROP CONSTRAINT IF EXISTS sports_challenge_definitions_result_direction_chk;
+
+  ALTER TABLE sports_challenge_definitions
+  ADD CONSTRAINT sports_challenge_definitions_result_direction_chk
+  CHECK (result_direction IN ('higher_is_better', 'lower_is_better'));
+END $$;
+
+CREATE TABLE IF NOT EXISTS sports_group_challenges (
+  id BIGSERIAL PRIMARY KEY,
+  definition_id BIGINT NOT NULL REFERENCES sports_challenge_definitions(id) ON DELETE RESTRICT,
+  group_id BIGINT NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
+  title VARCHAR(150) NOT NULL,
+  description TEXT NULL,
+  starts_on DATE NOT NULL,
+  ends_on DATE NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'active',
+  unit VARCHAR(30) NOT NULL DEFAULT 'cm',
+  target_reduction_percent NUMERIC(5,4) NOT NULL DEFAULT 0.1000,
+  fail_safe_threshold_percent NUMERIC(5,4) NOT NULL DEFAULT 0.5000,
+  created_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT sports_group_challenges_date_range_chk CHECK (ends_on >= starts_on),
+  CONSTRAINT sports_group_challenges_status_chk CHECK (
+    status IN ('draft', 'active', 'completed', 'archived')
+  ),
+  CONSTRAINT sports_group_challenges_target_reduction_percent_chk CHECK (
+    target_reduction_percent >= 0 AND target_reduction_percent <= 1
+  ),
+  CONSTRAINT sports_group_challenges_fail_safe_threshold_percent_chk CHECK (
+    fail_safe_threshold_percent >= 0 AND fail_safe_threshold_percent <= 1
+  ),
+  CONSTRAINT sports_group_challenges_unique_group_definition_start UNIQUE (
+    group_id,
+    definition_id,
+    starts_on
+  )
+);
+
+DO $$
+BEGIN
+  ALTER TABLE sports_group_challenges
+  DROP CONSTRAINT IF EXISTS sports_group_challenges_unique_group_definition_start;
+END $$;
+
+CREATE TABLE IF NOT EXISTS sports_challenge_results (
+  id BIGSERIAL PRIMARY KEY,
+  challenge_id BIGINT NOT NULL REFERENCES sports_group_challenges(id) ON DELETE RESTRICT,
+  child_id BIGINT NOT NULL REFERENCES children(id) ON DELETE RESTRICT,
+  baseline_value NUMERIC(10,2) NULL,
+  final_value NUMERIC(10,2) NULL,
+  individual_target_value NUMERIC(10,2) NULL,
+  individual_target_reached BOOLEAN NULL,
+  repeated_or_improved_baseline BOOLEAN NULL,
+  difference_from_baseline NUMERIC(10,2) NULL,
+  difference_from_target NUMERIC(10,2) NULL,
+  notes TEXT NULL,
+  measured_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  measured_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT sports_challenge_results_baseline_value_chk CHECK (
+    baseline_value IS NULL OR baseline_value >= 0
+  ),
+  CONSTRAINT sports_challenge_results_final_value_chk CHECK (
+    final_value IS NULL OR final_value >= 0
+  ),
+  CONSTRAINT sports_challenge_results_individual_target_value_chk CHECK (
+    individual_target_value IS NULL OR individual_target_value >= 0
+  ),
+  CONSTRAINT sports_challenge_results_unique_challenge_child UNIQUE (challenge_id, child_id)
+);
+
+CREATE TABLE IF NOT EXISTS sports_challenge_summaries (
+  id BIGSERIAL PRIMARY KEY,
+  challenge_id BIGINT NOT NULL UNIQUE REFERENCES sports_group_challenges(id) ON DELETE RESTRICT,
+  participants_count INTEGER NOT NULL DEFAULT 0,
+  final_results_count INTEGER NOT NULL DEFAULT 0,
+  baseline_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+  group_target_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+  final_total NUMERIC(12,2) NOT NULL DEFAULT 0,
+  group_target_reached BOOLEAN NOT NULL DEFAULT FALSE,
+  repeated_or_improved_count INTEGER NOT NULL DEFAULT 0,
+  repeated_or_improved_percentage NUMERIC(6,2) NOT NULL DEFAULT 0,
+  fail_safe_reached BOOLEAN NOT NULL DEFAULT FALSE,
+  final_status VARCHAR(30) NOT NULL DEFAULT 'not_passed',
+  target_reduction_percent NUMERIC(5,4) NOT NULL DEFAULT 0.1000,
+  fail_safe_threshold_percent NUMERIC(5,4) NOT NULL DEFAULT 0.5000,
+  calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT sports_challenge_summaries_participants_count_chk CHECK (participants_count >= 0),
+  CONSTRAINT sports_challenge_summaries_final_results_count_chk CHECK (final_results_count >= 0),
+  CONSTRAINT sports_challenge_summaries_baseline_total_chk CHECK (baseline_total >= 0),
+  CONSTRAINT sports_challenge_summaries_group_target_total_chk CHECK (group_target_total >= 0),
+  CONSTRAINT sports_challenge_summaries_final_total_chk CHECK (final_total >= 0),
+  CONSTRAINT sports_challenge_summaries_repeated_or_improved_count_chk CHECK (
+    repeated_or_improved_count >= 0
+  ),
+  CONSTRAINT sports_challenge_summaries_repeated_or_improved_percentage_chk CHECK (
+    repeated_or_improved_percentage >= 0 AND repeated_or_improved_percentage <= 100
+  ),
+  CONSTRAINT sports_challenge_summaries_final_status_chk CHECK (
+    final_status IN ('passed', 'not_passed')
+  ),
+  CONSTRAINT sports_challenge_summaries_target_reduction_percent_chk CHECK (
+    target_reduction_percent >= 0 AND target_reduction_percent <= 1
+  ),
+  CONSTRAINT sports_challenge_summaries_fail_safe_threshold_percent_chk CHECK (
+    fail_safe_threshold_percent >= 0 AND fail_safe_threshold_percent <= 1
+  )
+);
+
+CREATE TABLE IF NOT EXISTS creative_challenges (
+  id BIGSERIAL PRIMARY KEY,
+  academy_id BIGINT NOT NULL REFERENCES academies(id) ON DELETE RESTRICT,
+  title VARCHAR(150) NOT NULL,
+  activity_type VARCHAR(100) NOT NULL,
+  description TEXT NULL,
+  starts_on DATE NOT NULL,
+  ends_on DATE NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'active',
+  created_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT creative_challenges_date_range_chk CHECK (ends_on >= starts_on),
+  CONSTRAINT creative_challenges_status_chk CHECK (
+    status IN ('draft', 'active', 'completed', 'archived')
+  )
+);
+
+CREATE TABLE IF NOT EXISTS creative_challenge_group_results (
+  id BIGSERIAL PRIMARY KEY,
+  challenge_id BIGINT NOT NULL REFERENCES creative_challenges(id) ON DELETE CASCADE,
+  group_id BIGINT NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
+  alpha_balls SMALLINT NULL,
+  result_note TEXT NULL,
+  evaluated_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  evaluated_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT creative_challenge_group_results_alpha_balls_chk CHECK (
+    alpha_balls IS NULL OR alpha_balls BETWEEN 0 AND 10
+  ),
+  CONSTRAINT creative_challenge_group_results_unique_challenge_group UNIQUE (challenge_id, group_id)
+);
+
 CREATE TABLE IF NOT EXISTS questionnaire_tokens (
   id BIGSERIAL PRIMARY KEY,
   child_id BIGINT NOT NULL REFERENCES children(id) ON DELETE RESTRICT,
@@ -249,6 +478,21 @@ CREATE TABLE IF NOT EXISTS questionnaire_tokens (
   CONSTRAINT questionnaire_tokens_revoked_after_created_chk CHECK (
     revoked_at IS NULL OR revoked_at >= created_at
   )
+);
+
+CREATE TABLE IF NOT EXISTS questionnaire_delivery_logs (
+  id BIGSERIAL PRIMARY KEY,
+  child_id BIGINT NOT NULL REFERENCES children(id) ON DELETE RESTRICT,
+  questionnaire_token_id BIGINT NULL REFERENCES questionnaire_tokens(id) ON DELETE SET NULL,
+  channel VARCHAR(30) NOT NULL DEFAULT 'email',
+  recipient VARCHAR(255) NOT NULL,
+  status VARCHAR(30) NOT NULL,
+  sent_at TIMESTAMPTZ NULL,
+  error_message TEXT NULL,
+  created_by BIGINT NULL REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT questionnaire_delivery_logs_channel_chk CHECK (channel IN ('email')),
+  CONSTRAINT questionnaire_delivery_logs_status_chk CHECK (status IN ('sent', 'failed'))
 );
 
 CREATE TABLE IF NOT EXISTS comfort_zone_spheres (
@@ -448,6 +692,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS coach_groups_primary_per_group_unique_idx
   ON coach_groups (group_id)
   WHERE is_primary = TRUE AND unassigned_at IS NULL;
 
+CREATE INDEX IF NOT EXISTS coach_academies_coach_id_idx
+  ON coach_academies (coach_id);
+CREATE INDEX IF NOT EXISTS coach_academies_academy_id_idx
+  ON coach_academies (academy_id);
+CREATE UNIQUE INDEX IF NOT EXISTS coach_academies_active_unique_idx
+  ON coach_academies (coach_id, academy_id)
+  WHERE unassigned_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS coach_seasons_coach_id_idx
+  ON coach_seasons (coach_id);
+CREATE INDEX IF NOT EXISTS coach_seasons_season_id_idx
+  ON coach_seasons (season_id);
+CREATE UNIQUE INDEX IF NOT EXISTS coach_seasons_active_unique_idx
+  ON coach_seasons (coach_id, season_id)
+  WHERE unassigned_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS children_parent_email_lower_idx
   ON children (LOWER(parent_email));
 CREATE INDEX IF NOT EXISTS children_is_active_idx
@@ -459,8 +719,11 @@ CREATE INDEX IF NOT EXISTS child_group_assignments_child_id_idx
   ON child_group_assignments (child_id);
 CREATE INDEX IF NOT EXISTS child_group_assignments_group_id_idx
   ON child_group_assignments (group_id);
-CREATE UNIQUE INDEX IF NOT EXISTS child_group_assignments_active_child_unique_idx
-  ON child_group_assignments (child_id)
+CREATE INDEX IF NOT EXISTS child_group_assignments_season_id_idx
+  ON child_group_assignments (season_id);
+DROP INDEX IF EXISTS child_group_assignments_active_child_unique_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS child_group_assignments_active_child_season_unique_idx
+  ON child_group_assignments (child_id, season_id)
   WHERE ends_on IS NULL;
 
 CREATE INDEX IF NOT EXISTS group_social_active_days_group_id_idx
@@ -499,6 +762,56 @@ CREATE INDEX IF NOT EXISTS weekly_social_summaries_week_end_date_idx
 CREATE INDEX IF NOT EXISTS weekly_social_summaries_weekly_status_idx
   ON weekly_social_summaries (weekly_status);
 
+CREATE INDEX IF NOT EXISTS sports_challenge_definitions_code_idx
+  ON sports_challenge_definitions (code);
+CREATE INDEX IF NOT EXISTS sports_challenge_definitions_is_active_idx
+  ON sports_challenge_definitions (is_active);
+
+CREATE INDEX IF NOT EXISTS sports_group_challenges_definition_id_idx
+  ON sports_group_challenges (definition_id);
+CREATE INDEX IF NOT EXISTS sports_group_challenges_group_id_idx
+  ON sports_group_challenges (group_id);
+CREATE INDEX IF NOT EXISTS sports_group_challenges_starts_on_idx
+  ON sports_group_challenges (starts_on);
+CREATE INDEX IF NOT EXISTS sports_group_challenges_ends_on_idx
+  ON sports_group_challenges (ends_on);
+CREATE INDEX IF NOT EXISTS sports_group_challenges_status_idx
+  ON sports_group_challenges (status);
+
+CREATE INDEX IF NOT EXISTS sports_challenge_results_challenge_id_idx
+  ON sports_challenge_results (challenge_id);
+CREATE INDEX IF NOT EXISTS sports_challenge_results_child_id_idx
+  ON sports_challenge_results (child_id);
+CREATE INDEX IF NOT EXISTS sports_challenge_results_measured_by_idx
+  ON sports_challenge_results (measured_by);
+
+CREATE INDEX IF NOT EXISTS sports_challenge_summaries_challenge_id_idx
+  ON sports_challenge_summaries (challenge_id);
+CREATE INDEX IF NOT EXISTS sports_challenge_summaries_final_status_idx
+  ON sports_challenge_summaries (final_status);
+CREATE INDEX IF NOT EXISTS sports_challenge_summaries_calculated_at_idx
+  ON sports_challenge_summaries (calculated_at);
+
+CREATE INDEX IF NOT EXISTS creative_challenges_academy_id_idx
+  ON creative_challenges (academy_id);
+CREATE INDEX IF NOT EXISTS creative_challenges_starts_on_idx
+  ON creative_challenges (starts_on);
+CREATE INDEX IF NOT EXISTS creative_challenges_ends_on_idx
+  ON creative_challenges (ends_on);
+CREATE INDEX IF NOT EXISTS creative_challenges_status_idx
+  ON creative_challenges (status);
+CREATE INDEX IF NOT EXISTS creative_challenges_created_by_idx
+  ON creative_challenges (created_by);
+
+CREATE INDEX IF NOT EXISTS creative_challenge_group_results_challenge_id_idx
+  ON creative_challenge_group_results (challenge_id);
+CREATE INDEX IF NOT EXISTS creative_challenge_group_results_group_id_idx
+  ON creative_challenge_group_results (group_id);
+CREATE INDEX IF NOT EXISTS creative_challenge_group_results_evaluated_by_idx
+  ON creative_challenge_group_results (evaluated_by);
+CREATE INDEX IF NOT EXISTS creative_challenge_group_results_evaluated_at_idx
+  ON creative_challenge_group_results (evaluated_at);
+
 CREATE UNIQUE INDEX IF NOT EXISTS questionnaire_tokens_token_unique
   ON questionnaire_tokens (token);
 CREATE INDEX IF NOT EXISTS questionnaire_tokens_child_id_idx
@@ -510,6 +823,17 @@ CREATE INDEX IF NOT EXISTS questionnaire_tokens_expires_at_idx
 CREATE UNIQUE INDEX IF NOT EXISTS questionnaire_tokens_pending_per_child_unique_idx
   ON questionnaire_tokens (child_id)
   WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS questionnaire_delivery_logs_child_id_idx
+  ON questionnaire_delivery_logs (child_id);
+CREATE INDEX IF NOT EXISTS questionnaire_delivery_logs_token_id_idx
+  ON questionnaire_delivery_logs (questionnaire_token_id);
+CREATE INDEX IF NOT EXISTS questionnaire_delivery_logs_status_idx
+  ON questionnaire_delivery_logs (status);
+CREATE INDEX IF NOT EXISTS questionnaire_delivery_logs_sent_at_idx
+  ON questionnaire_delivery_logs (sent_at);
+CREATE INDEX IF NOT EXISTS questionnaire_delivery_logs_created_at_idx
+  ON questionnaire_delivery_logs (created_at);
 
 CREATE INDEX IF NOT EXISTS comfort_zone_subspheres_sphere_id_idx
   ON comfort_zone_subspheres (sphere_id);
@@ -625,6 +949,42 @@ EXECUTE FUNCTION set_updated_at();
 DROP TRIGGER IF EXISTS weekly_social_summaries_set_updated_at_trg ON weekly_social_summaries;
 CREATE TRIGGER weekly_social_summaries_set_updated_at_trg
 BEFORE UPDATE ON weekly_social_summaries
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS sports_challenge_definitions_set_updated_at_trg ON sports_challenge_definitions;
+CREATE TRIGGER sports_challenge_definitions_set_updated_at_trg
+BEFORE UPDATE ON sports_challenge_definitions
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS sports_group_challenges_set_updated_at_trg ON sports_group_challenges;
+CREATE TRIGGER sports_group_challenges_set_updated_at_trg
+BEFORE UPDATE ON sports_group_challenges
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS sports_challenge_results_set_updated_at_trg ON sports_challenge_results;
+CREATE TRIGGER sports_challenge_results_set_updated_at_trg
+BEFORE UPDATE ON sports_challenge_results
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS sports_challenge_summaries_set_updated_at_trg ON sports_challenge_summaries;
+CREATE TRIGGER sports_challenge_summaries_set_updated_at_trg
+BEFORE UPDATE ON sports_challenge_summaries
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS creative_challenges_set_updated_at_trg ON creative_challenges;
+CREATE TRIGGER creative_challenges_set_updated_at_trg
+BEFORE UPDATE ON creative_challenges
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS creative_challenge_group_results_set_updated_at_trg ON creative_challenge_group_results;
+CREATE TRIGGER creative_challenge_group_results_set_updated_at_trg
+BEFORE UPDATE ON creative_challenge_group_results
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 

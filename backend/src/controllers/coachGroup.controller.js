@@ -4,7 +4,14 @@ const {
   groupCoachParamsSchema,
   assignCoachSchema,
   updateCoachAssignmentSchema,
+  listCoachDirectoryQuerySchema,
 } = require('../validations/coachGroup.validation');
+
+async function listCoachDirectory(req, res) {
+  const filters = listCoachDirectoryQuerySchema.parse(req.query);
+  const result = await coachGroupService.listCoachDirectory(filters, req.user);
+  res.status(200).json(result);
+}
 
 function getRequestContext(req) {
   return {
@@ -57,6 +64,7 @@ async function unassignCoachFromGroup(req, res) {
 }
 
 module.exports = {
+  listCoachDirectory,
   listCoachesForGroup,
   assignCoachToGroup,
   updateCoachAssignment,

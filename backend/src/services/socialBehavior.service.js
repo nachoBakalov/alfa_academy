@@ -4,6 +4,8 @@ const socialBehaviorRepository = require('../repositories/socialBehavior.reposit
 const auditLogRepository = require('../repositories/auditLog.repository');
 const {
   calculateChildDailyResult,
+  calculateWeeklyAlphaBalls,
+  calculateWeeklyStatus,
 } = require('./socialBehaviorCalculation.service');
 
 const DAY_LABELS = {
@@ -30,6 +32,49 @@ function getIsoDayOfWeek(date) {
   const parsed = parseDateOrThrow(date);
   const day = parsed.getUTCDay();
   return day === 0 ? 7 : day;
+}
+
+function formatDate(date) {
+  if (typeof date === 'string') {
+    return parseDateOrThrow(date).toISOString().slice(0, 10);
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(date, days) {
+  const result = new Date(date.getTime());
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
+}
+
+function getWeekEndDate(weekStartDate) {
+  const start = parseDateOrThrow(weekStartDate);
+  return formatDate(addDays(start, 6));
+}
+
+function buildWeekDates(weekStartDate) {
+  const start = parseDateOrThrow(weekStartDate);
+  const days = [];
+
+  for (let offset = 0; offset < 7; offset += 1) {
+    const currentDate = addDays(start, offset);
+    const dayOfWeek = getIsoDayOfWeek(formatDate(currentDate));
+
+    days.push({
+      date: formatDate(currentDate),
+      dayOfWeek,
+      label: DAY_LABELS[dayOfWeek],
+    });
+  }
+
+  return days;
+}
+
+function ensureWeekStartIsMonday(weekStartDate) {
+  if (getIsoDayOfWeek(weekStartDate) !== 1) {
+    throw new AppError(400, 'weekStartDate must be a Monday');
+  }
 }
 
 function getDefaultActiveDays() {
@@ -154,6 +199,152 @@ function buildSummaryFromEvaluations(numberOfChildren, evaluations) {
   }
 
   return summary;
+}
+
+async function buildReadOnlyDailySummary(groupId, date, isActiveDay, client) {
+  const children = await socialBehaviorRepository.getChildrenForGroupOnDate(groupId, date, client);
+  const evaluations = await socialBehaviorRepository.getDailyEvaluationsForGroupDate(
+    groupId,
+    date,
+    client
+  );
+
+  const childIds = new Set(children.map((child) => Number(child.id)));
+  const evaluationsForChildren = evaluations.filter((evaluation) =>
+    childIds.has(Number(evaluation.child_id))
+  );
+
+  const summary = buildSummaryFromEvaluations(children.length, evaluationsForChildren);
+
+  return {
+    isActiveDay,
+    numberOfChildren: summary.numberOfChildren,
+    externalDailyMaximum: summary.externalDailyMaximum,
+    dailySocialResult: summary.dailySocialResult,
+    greenChildrenCount: summary.greenChildrenCount,
+    orangeChildrenCount: summary.orangeChildrenCount,
+    redChildrenCount: summary.redChildrenCount,
+    completedChildrenCount: summary.completedChildrenCount,
+    missingChildrenCount: summary.missingChildrenCount,
+  };
+}
+
+function calculateWeeklyFromDays(days) {
+  const activeDays = days.filter((day) => day.isActiveDay);
+  const activeDaysCount = activeDays.length;
+
+  const weeklyMaximum = activeDays.reduce(
+    (sum, day) => sum + (Number(day.externalDailyMaximum) || 0),
+    0
+  );
+
+  const weeklySocialResult = activeDays.reduce(
+    (sum, day) => sum + (Number(day.dailySocialResult) || 0),
+    0
+  );
+
+  const numberOfChildren = activeDays.reduce(
+    (maxValue, day) => Math.max(maxValue, Number(day.numberOfChildren) || 0),
+    0
+  );
+
+  let weeklyPercentage = 0;
+
+  if (weeklyMaximum > 0) {
+    const rawPercentage = (weeklySocialResult / weeklyMaximum) * 100;
+    weeklyPercentage = Math.round(Math.max(0, Math.min(100, rawPercentage)) * 100) / 100;
+  }
+
+  const weeklyAlphaBalls = calculateWeeklyAlphaBalls({
+    weeklySocialResult,
+    weeklyMaximum,
+  });
+  const weeklyStatus = calculateWeeklyStatus(weeklyAlphaBalls);
+
+  return {
+    activeDaysCount,
+    numberOfChildren,
+    weeklyMaximum,
+    weeklySocialResult,
+    weeklyPercentage,
+    weeklyAlphaBalls,
+    weeklyStatus,
+    targetAlphaBalls: 8,
+    maxAlphaBalls: 10,
+  };
+}
+
+async function buildWeeklyDailyBreakdown(groupId, weekStartDate, client) {
+  const weekDates = buildWeekDates(weekStartDate);
+  const weekEndDate = weekDates[weekDates.length - 1].date;
+
+  const [activeDayRows, persistedDailyRows] = await Promise.all([
+    socialBehaviorRepository.getActiveDaysForGroup(groupId, client),
+    socialBehaviorRepository.getDailySummariesForGroupRange(
+      groupId,
+      weekStartDate,
+      weekEndDate,
+      client
+    ),
+  ]);
+
+  const resolvedActiveDays = buildResolvedActiveDays(activeDayRows);
+  const isActiveByDayOfWeek = new Map(
+    resolvedActiveDays.map((day) => [day.dayOfWeek, day.isActive])
+  );
+  const persistedByDate = new Map(
+    persistedDailyRows.map((row) => [formatDate(row.summary_date), row])
+  );
+
+  const days = [];
+
+  for (const weekDay of weekDates) {
+    const isActiveDay = Boolean(isActiveByDayOfWeek.get(weekDay.dayOfWeek));
+    const persisted = persistedByDate.get(weekDay.date);
+
+    if (persisted) {
+      const readOnly = await buildReadOnlyDailySummary(groupId, weekDay.date, isActiveDay, client);
+
+      days.push({
+        date: weekDay.date,
+        dayOfWeek: weekDay.dayOfWeek,
+        label: weekDay.label,
+        isActiveDay,
+        numberOfChildren: Number(persisted.number_of_children) || 0,
+        externalDailyMaximum: Number(persisted.external_daily_maximum) || 0,
+        dailySocialResult: Number(persisted.daily_social_result) || 0,
+        greenChildrenCount: Number(persisted.green_children_count) || 0,
+        orangeChildrenCount: Number(persisted.orange_children_count) || 0,
+        redChildrenCount: Number(persisted.red_children_count) || 0,
+        completedChildrenCount: readOnly.completedChildrenCount,
+        missingChildrenCount: Math.max(
+          0,
+          (Number(persisted.number_of_children) || 0) - readOnly.completedChildrenCount
+        ),
+      });
+
+      continue;
+    }
+
+    const readOnly = await buildReadOnlyDailySummary(groupId, weekDay.date, isActiveDay, client);
+
+    days.push({
+      date: weekDay.date,
+      dayOfWeek: weekDay.dayOfWeek,
+      label: weekDay.label,
+      isActiveDay: readOnly.isActiveDay,
+      numberOfChildren: readOnly.numberOfChildren,
+      externalDailyMaximum: readOnly.externalDailyMaximum,
+      dailySocialResult: readOnly.dailySocialResult,
+      greenChildrenCount: readOnly.greenChildrenCount,
+      orangeChildrenCount: readOnly.orangeChildrenCount,
+      redChildrenCount: readOnly.redChildrenCount,
+      completedChildrenCount: readOnly.completedChildrenCount,
+      missingChildrenCount: readOnly.missingChildrenCount,
+    });
+  }
+
+  return days;
 }
 
 function buildDailyScreen(children, evaluations, summary) {
@@ -462,17 +653,131 @@ async function getDailySummary(groupId, date, actor) {
   };
 }
 
+async function getWeeklySummary(groupId, weekStartDate, actor) {
+  ensureWeekStartIsMonday(weekStartDate);
+
+  const group = await ensureGroupExists(groupId);
+  await ensureCanViewGroupSocial(actor, groupId);
+
+  const weekEndDate = getWeekEndDate(weekStartDate);
+  const days = await buildWeeklyDailyBreakdown(groupId, weekStartDate);
+  const summary = calculateWeeklyFromDays(days);
+  const persisted = await socialBehaviorRepository.getWeeklySummary(groupId, weekStartDate);
+
+  return {
+    group: {
+      id: Number(group.id),
+      name: group.name,
+      season: {
+        id: Number(group.season_id),
+        name: group.season_name,
+      },
+      academy: {
+        id: Number(group.academy_id),
+        name: group.academy_name,
+      },
+    },
+    week: {
+      weekStartDate,
+      weekEndDate,
+    },
+    days,
+    summary,
+    persisted: {
+      exists: Boolean(persisted),
+      calculatedAt: persisted ? persisted.calculated_at : null,
+    },
+  };
+}
+
+async function recalculateWeeklySummary(groupId, payload, context) {
+  ensureWeekStartIsMonday(payload.weekStartDate);
+
+  const group = await ensureGroupExists(groupId);
+  await ensureCanEditGroupSocial(context.actor, groupId);
+
+  const weekStartDate = payload.weekStartDate;
+  const weekEndDate = getWeekEndDate(weekStartDate);
+
+  return withTransaction(async (client) => {
+    const days = await buildWeeklyDailyBreakdown(groupId, weekStartDate, client);
+    const summary = calculateWeeklyFromDays(days);
+
+    await socialBehaviorRepository.upsertWeeklySummary(
+      {
+        groupId,
+        weekStartDate,
+        weekEndDate,
+        activeDaysCount: summary.activeDaysCount,
+        numberOfChildren: summary.numberOfChildren,
+        weeklyMaximum: summary.weeklyMaximum,
+        weeklySocialResult: summary.weeklySocialResult,
+        weeklyPercentage: summary.weeklyPercentage,
+        weeklyAlphaBalls: summary.weeklyAlphaBalls,
+        weeklyStatus: summary.weeklyStatus,
+      },
+      client
+    );
+
+    await auditLogRepository.createAuditLog(
+      {
+        actorUserId: context.actor.id,
+        entityType: 'social_weekly',
+        entityId: groupId,
+        action: 'social.weekly_recalculated',
+        metadata: {
+          groupId,
+          weekStartDate,
+          weekEndDate,
+          activeDaysCount: summary.activeDaysCount,
+          weeklyMaximum: summary.weeklyMaximum,
+          weeklySocialResult: summary.weeklySocialResult,
+          weeklyAlphaBalls: summary.weeklyAlphaBalls,
+          weeklyStatus: summary.weeklyStatus,
+        },
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+      },
+      client
+    );
+
+    return {
+      message: 'Weekly social summary recalculated successfully',
+      group: {
+        id: Number(group.id),
+        name: group.name,
+      },
+      week: {
+        weekStartDate,
+        weekEndDate,
+      },
+      summary,
+      days,
+    };
+  });
+}
+
 module.exports = {
   getGroupActiveDays,
   updateGroupActiveDays,
   getDailyEvaluationScreen,
   saveDailyEvaluations,
   getDailySummary,
+  getWeeklySummary,
+  recalculateWeeklySummary,
   ensureCanViewGroupSocial,
   ensureCanEditGroupSocial,
+  ensureWeekStartIsMonday,
   getIsoDayOfWeek,
+  getWeekEndDate,
+  addDays,
+  formatDate,
+  buildWeekDates,
   getDefaultActiveDays,
   resolveIsActiveDay,
   buildDailyScreen,
+  buildReadOnlyDailySummary,
+  buildWeeklyDailyBreakdown,
+  calculateWeeklyFromDays,
   recalculateDailySummary,
 };

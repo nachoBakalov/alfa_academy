@@ -1,5 +1,9 @@
 const { pool } = require('../db/postgres');
 
+function getExecutor(client) {
+  return client || pool;
+}
+
 function buildSeasonFilters(filters, actor) {
   const joins = ['INNER JOIN academies a ON a.id = s.academy_id'];
   const conditions = [];
@@ -23,11 +27,10 @@ function buildSeasonFilters(filters, actor) {
 
   if (actor.role === 'coach') {
     joins.push(
-      'INNER JOIN groups g ON g.season_id = s.id',
-      'INNER JOIN coach_groups cg ON cg.group_id = g.id AND cg.unassigned_at IS NULL'
+      'INNER JOIN coach_seasons cs ON cs.season_id = s.id AND cs.unassigned_at IS NULL'
     );
     values.push(actor.id);
-    conditions.push(`cg.coach_id = $${values.length}`);
+    conditions.push(`cs.coach_id = $${values.length}`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -80,7 +83,9 @@ async function countSeasons(filters, actor) {
   return rows[0] ? rows[0].total : 0;
 }
 
-async function findById(id) {
+async function findById(id, client) {
+  const executor = getExecutor(client);
+
   const query = `
     SELECT
       id,
@@ -97,11 +102,13 @@ async function findById(id) {
     LIMIT 1
   `;
 
-  const { rows } = await pool.query(query, [id]);
+  const { rows } = await executor.query(query, [id]);
   return rows[0] || null;
 }
 
-async function findByIdWithAcademy(id) {
+async function findByIdWithAcademy(id, client) {
+  const executor = getExecutor(client);
+
   const query = `
     SELECT
       s.id,
@@ -121,11 +128,13 @@ async function findByIdWithAcademy(id) {
     LIMIT 1
   `;
 
-  const { rows } = await pool.query(query, [id]);
+  const { rows } = await executor.query(query, [id]);
   return rows[0] || null;
 }
 
-async function findByAcademyAndName(academyId, name) {
+async function findByAcademyAndName(academyId, name, client) {
+  const executor = getExecutor(client);
+
   const query = `
     SELECT
       id,
@@ -143,11 +152,13 @@ async function findByAcademyAndName(academyId, name) {
     LIMIT 1
   `;
 
-  const { rows } = await pool.query(query, [academyId, name]);
+  const { rows } = await executor.query(query, [academyId, name]);
   return rows[0] || null;
 }
 
-async function createSeason(data) {
+async function createSeason(data, client) {
+  const executor = getExecutor(client);
+
   const query = `
     INSERT INTO seasons (
       academy_id,
@@ -168,13 +179,59 @@ async function createSeason(data) {
     data.createdBy || null,
   ];
 
-  const { rows } = await pool.query(query, values);
+  const { rows } = await executor.query(query, values);
 
   if (!rows[0]) {
     return null;
   }
 
-  return findByIdWithAcademy(rows[0].id);
+  return findByIdWithAcademy(rows[0].id, client);
+}
+
+async function findOrCreateDefaultSeasonForAcademy(academyId, createdBy, client) {
+  const executor = getExecutor(client);
+  const defaultSeasonName = 'Основен период';
+
+  const existing = await findByAcademyAndName(academyId, defaultSeasonName, client);
+
+  if (existing) {
+    return findByIdWithAcademy(existing.id, client);
+  }
+
+  const currentYear = new Date().getUTCFullYear();
+  const startsOn = `${currentYear}-01-01`;
+  const endsOn = `${currentYear}-12-31`;
+
+  try {
+    const query = `
+      INSERT INTO seasons (
+        academy_id,
+        name,
+        starts_on,
+        ends_on,
+        is_active,
+        created_by
+      )
+      VALUES ($1, $2, $3, $4, TRUE, $5)
+      RETURNING id
+    `;
+
+    const values = [academyId, defaultSeasonName, startsOn, endsOn, createdBy || null];
+    const { rows } = await executor.query(query, values);
+
+    if (!rows[0]) {
+      return null;
+    }
+
+    return findByIdWithAcademy(rows[0].id, client);
+  } catch (error) {
+    if (error && error.code === '23505') {
+      const fallback = await findByAcademyAndName(academyId, defaultSeasonName, client);
+      return fallback ? findByIdWithAcademy(fallback.id, client) : null;
+    }
+
+    throw error;
+  }
 }
 
 async function updateSeason(id, data) {
@@ -239,6 +296,13 @@ async function coachCanAccessSeason(coachId, seasonId) {
   const query = `
     SELECT EXISTS (
       SELECT 1
+      FROM coach_seasons cs
+      WHERE cs.coach_id = $1
+        AND cs.season_id = $2
+        AND cs.unassigned_at IS NULL
+    )
+    OR EXISTS (
+      SELECT 1
       FROM coach_groups cg
       INNER JOIN groups g ON g.id = cg.group_id
       WHERE cg.coach_id = $1
@@ -257,6 +321,7 @@ module.exports = {
   findById,
   findByIdWithAcademy,
   findByAcademyAndName,
+  findOrCreateDefaultSeasonForAcademy,
   createSeason,
   updateSeason,
   updateStatus,

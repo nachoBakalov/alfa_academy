@@ -5,16 +5,67 @@ function getExecutor(client) {
 }
 
 function buildChildrenFilters(filters, actor) {
-  const joins = [
-    'LEFT JOIN child_group_assignments cga ON cga.child_id = c.id AND cga.ends_on IS NULL',
-    'LEFT JOIN groups g ON g.id = cga.group_id',
-  ];
   const conditions = [];
   const values = [];
 
+  const assignmentConditions = ['cga.child_id = c.id', 'cga.ends_on IS NULL'];
+
   if (filters.groupId !== undefined) {
     values.push(filters.groupId);
-    conditions.push(`cga.group_id = $${values.length}`);
+    assignmentConditions.push(`cga.group_id = $${values.length}`);
+  }
+
+  if (filters.seasonId !== undefined) {
+    values.push(filters.seasonId);
+    assignmentConditions.push(`cga.season_id = $${values.length}`);
+  }
+
+  if (filters.academyId !== undefined) {
+    values.push(filters.academyId);
+    assignmentConditions.push(`sg.academy_id = $${values.length}`);
+  }
+
+  if (actor.role === 'coach') {
+    values.push(actor.id);
+    assignmentConditions.push(`EXISTS (
+      SELECT 1
+      FROM coach_academies ca
+      WHERE ca.coach_id = $${values.length}
+        AND ca.academy_id = sg.academy_id
+        AND ca.unassigned_at IS NULL
+    )`);
+  }
+
+  const joins = [
+    `LEFT JOIN LATERAL (
+      SELECT
+        cga.child_id,
+        cga.group_id,
+        cga.season_id,
+        g.name AS group_name,
+        sg.id AS academy_season_id,
+        sg.name AS season_name,
+        ag.id AS academy_id,
+        ag.name AS academy_name,
+        cga.starts_on,
+        cga.ends_on
+      FROM child_group_assignments cga
+      INNER JOIN groups g ON g.id = cga.group_id
+      INNER JOIN seasons sg ON sg.id = g.season_id
+      INNER JOIN academies ag ON ag.id = sg.academy_id
+      WHERE ${assignmentConditions.join(' AND ')}
+      ORDER BY cga.starts_on DESC, cga.id DESC
+      LIMIT 1
+    ) cga ON TRUE`,
+  ];
+
+  if (
+    filters.groupId !== undefined ||
+    filters.seasonId !== undefined ||
+    filters.academyId !== undefined ||
+    actor.role === 'coach'
+  ) {
+    conditions.push('cga.group_id IS NOT NULL');
   }
 
   if (typeof filters.isActive === 'boolean') {
@@ -28,14 +79,6 @@ function buildChildrenFilters(filters, actor) {
     conditions.push(
       `(c.first_name ILIKE ${placeholder} OR c.last_name ILIKE ${placeholder} OR COALESCE(c.parent_name, '') ILIKE ${placeholder})`
     );
-  }
-
-  if (actor.role === 'coach') {
-    joins.push(
-      'INNER JOIN coach_groups cg ON cg.group_id = cga.group_id AND cg.unassigned_at IS NULL'
-    );
-    values.push(actor.id);
-    conditions.push(`cg.coach_id = $${values.length}`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -63,8 +106,12 @@ async function listChildren(filters, actor) {
       c.is_active,
       c.created_at,
       c.updated_at,
-      g.id AS current_group_id,
-      g.name AS current_group_name,
+      cga.group_id AS current_group_id,
+      cga.group_name AS current_group_name,
+      cga.season_id AS current_season_id,
+      cga.season_name AS current_season_name,
+      cga.academy_id AS current_academy_id,
+      cga.academy_name AS current_academy_name,
       qt.status AS questionnaire_status,
       qt.expires_at AS questionnaire_expires_at,
       qt.token AS questionnaire_token
@@ -102,7 +149,9 @@ async function countChildren(filters, actor) {
   return rows[0] ? rows[0].total : 0;
 }
 
-async function findById(id) {
+async function findById(id, client) {
+  const executor = getExecutor(client);
+
   const query = `
     SELECT
       c.id,
@@ -124,7 +173,7 @@ async function findById(id) {
     LIMIT 1
   `;
 
-  const { rows } = await pool.query(query, [id]);
+  const { rows } = await executor.query(query, [id]);
   return rows[0] || null;
 }
 
@@ -145,16 +194,37 @@ async function findByIdWithCurrentGroup(id) {
       c.created_by,
       c.created_at,
       c.updated_at,
-      g.id AS current_group_id,
-      g.name AS current_group_name,
+      cga.group_id AS current_group_id,
+      cga.group_name AS current_group_name,
+      cga.season_id AS current_season_id,
+      cga.season_name AS current_season_name,
+      cga.academy_id AS current_academy_id,
+      cga.academy_name AS current_academy_name,
       qt.status AS questionnaire_status,
       qt.expires_at AS questionnaire_expires_at,
       qt.token AS questionnaire_token
     FROM children c
-    LEFT JOIN child_group_assignments cga
-      ON cga.child_id = c.id
-      AND cga.ends_on IS NULL
-    LEFT JOIN groups g ON g.id = cga.group_id
+    LEFT JOIN LATERAL (
+      SELECT
+        cga.child_id,
+        cga.group_id,
+        cga.season_id,
+        g.name AS group_name,
+        sg.id AS academy_season_id,
+        sg.name AS season_name,
+        ag.id AS academy_id,
+        ag.name AS academy_name,
+        cga.starts_on,
+        cga.ends_on
+      FROM child_group_assignments cga
+        INNER JOIN groups g ON g.id = cga.group_id
+        INNER JOIN seasons sg ON sg.id = g.season_id
+        INNER JOIN academies ag ON ag.id = sg.academy_id
+      WHERE cga.child_id = c.id
+        AND cga.ends_on IS NULL
+      ORDER BY cga.starts_on DESC, cga.id DESC
+      LIMIT 1
+    ) cga ON TRUE
     LEFT JOIN LATERAL (
       SELECT q.token, q.status, q.expires_at, q.created_at
       FROM questionnaire_tokens q
@@ -303,16 +373,268 @@ async function assignChildToGroup(data, client) {
     INSERT INTO child_group_assignments (
       child_id,
       group_id,
+      season_id,
       starts_on,
       created_by
     )
-    VALUES ($1, $2, $3, $4)
-    RETURNING id, child_id, group_id, starts_on, ends_on, created_at
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, child_id, group_id, season_id, starts_on, ends_on, created_at
   `;
 
-  const values = [data.childId, data.groupId, data.startsOn, data.createdBy || null];
+  const values = [
+    data.childId,
+    data.groupId,
+    data.seasonId,
+    data.startsOn,
+    data.createdBy || null,
+  ];
   const { rows } = await executor.query(query, values);
   return rows[0] || null;
+}
+
+async function findActiveGroupAssignment(childId, seasonId, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    SELECT
+      id,
+      child_id,
+      group_id,
+      season_id,
+      starts_on,
+      ends_on,
+      created_at
+    FROM child_group_assignments
+    WHERE child_id = $1
+      AND season_id = $2
+      AND ends_on IS NULL
+    LIMIT 1
+  `;
+
+  const { rows } = await executor.query(query, [childId, seasonId]);
+  return rows[0] || null;
+}
+
+async function closeActiveGroupAssignment(childId, seasonId, endsOn, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    UPDATE child_group_assignments
+    SET ends_on = $2
+    WHERE child_id = $1
+      AND season_id = $3
+      AND ends_on IS NULL
+    RETURNING id, child_id, group_id, season_id, starts_on, ends_on, created_at
+  `;
+
+  const { rows } = await executor.query(query, [childId, endsOn, seasonId]);
+  return rows[0] || null;
+}
+
+async function findActiveGroupAssignmentInAcademy(childId, academyId, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    SELECT
+      cga.id,
+      cga.child_id,
+      cga.group_id,
+      cga.season_id,
+      cga.starts_on,
+      cga.ends_on,
+      cga.created_at,
+      s.academy_id
+    FROM child_group_assignments cga
+    INNER JOIN groups g ON g.id = cga.group_id
+    INNER JOIN seasons s ON s.id = g.season_id
+    WHERE cga.child_id = $1
+      AND s.academy_id = $2
+      AND cga.ends_on IS NULL
+    ORDER BY cga.starts_on DESC, cga.id DESC
+    LIMIT 1
+  `;
+
+  const { rows } = await executor.query(query, [childId, academyId]);
+  return rows[0] || null;
+}
+
+async function closeActiveGroupAssignmentsInAcademy(childId, academyId, endsOn, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    UPDATE child_group_assignments cga
+    SET ends_on = $3
+    FROM groups g
+    INNER JOIN seasons s ON s.id = g.season_id
+    WHERE cga.group_id = g.id
+      AND cga.child_id = $1
+      AND s.academy_id = $2
+      AND cga.ends_on IS NULL
+  `;
+
+  const result = await executor.query(query, [childId, academyId, endsOn]);
+  return result.rowCount || 0;
+}
+
+async function getLatestProtectedActivityDateForChildGroup(childId, groupId, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    SELECT MAX(activity_date)::date AS latest_activity_date
+    FROM (
+      SELECT MAX(dse.evaluation_date)::date AS activity_date
+      FROM daily_social_evaluations dse
+      WHERE dse.child_id = $1
+        AND dse.group_id = $2
+
+      UNION ALL
+
+      SELECT MAX(sgc.ends_on)::date AS activity_date
+      FROM sports_challenge_results r
+      INNER JOIN sports_group_challenges sgc ON sgc.id = r.challenge_id
+      WHERE r.child_id = $1
+        AND sgc.group_id = $2
+    ) activity
+    WHERE activity.activity_date IS NOT NULL
+  `;
+
+  const { rows } = await executor.query(query, [childId, groupId]);
+  return rows[0] ? rows[0].latest_activity_date : null;
+}
+
+async function countActiveChildrenInSeason(seasonId, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    SELECT COUNT(DISTINCT cga.child_id)::int AS total
+    FROM child_group_assignments cga
+    WHERE cga.season_id = $1
+      AND cga.ends_on IS NULL
+  `;
+
+  const { rows } = await executor.query(query, [seasonId]);
+  return rows[0] ? Number(rows[0].total) : 0;
+}
+
+async function importChildrenFromSeasonToGroup(data, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    WITH source_children AS (
+      SELECT DISTINCT cga.child_id
+      FROM child_group_assignments cga
+      WHERE cga.season_id = $1
+        AND cga.ends_on IS NULL
+    ),
+    inserted AS (
+      INSERT INTO child_group_assignments (
+        child_id,
+        group_id,
+        season_id,
+        starts_on,
+        created_by
+      )
+      SELECT
+        sc.child_id,
+        $2,
+        $3,
+        $4,
+        $5
+      FROM source_children sc
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM child_group_assignments target
+        WHERE target.child_id = sc.child_id
+          AND target.season_id = $3
+          AND target.ends_on IS NULL
+      )
+      RETURNING child_id
+    )
+    SELECT COUNT(*)::int AS imported_count
+    FROM inserted
+  `;
+
+  const values = [
+    data.sourceSeasonId,
+    data.targetGroupId,
+    data.targetSeasonId,
+    data.startsOn,
+    data.createdBy || null,
+  ];
+
+  const { rows } = await executor.query(query, values);
+  return rows[0] ? Number(rows[0].imported_count) : 0;
+}
+
+async function importChildrenToGroup(data, client) {
+  const executor = getExecutor(client);
+
+  const query = `
+    WITH requested_children AS (
+      SELECT DISTINCT UNNEST($1::int[]) AS child_id
+    ),
+    eligible_children AS (
+      SELECT rc.child_id
+      FROM requested_children rc
+      WHERE EXISTS (
+        SELECT 1
+        FROM child_group_assignments source_cga
+        INNER JOIN groups source_group ON source_group.id = source_cga.group_id
+        INNER JOIN seasons source_season ON source_season.id = source_group.season_id
+        WHERE source_cga.child_id = rc.child_id
+          AND source_cga.ends_on IS NULL
+          AND ($2::int IS NULL OR source_group.id = $2)
+          AND ($3::int IS NULL OR source_season.academy_id = $3)
+      )
+    ),
+    inserted AS (
+      INSERT INTO child_group_assignments (
+        child_id,
+        group_id,
+        season_id,
+        starts_on,
+        created_by
+      )
+      SELECT
+        ec.child_id,
+        $4,
+        $5,
+        $6,
+        $7
+      FROM eligible_children ec
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM child_group_assignments target_cga
+        WHERE target_cga.child_id = ec.child_id
+          AND target_cga.season_id = $5
+          AND target_cga.ends_on IS NULL
+      )
+      RETURNING child_id
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM requested_children) AS requested_count,
+      (SELECT COUNT(*)::int FROM inserted) AS imported_count
+  `;
+
+  const values = [
+    data.childIds,
+    data.sourceGroupId || null,
+    data.sourceAcademyId || null,
+    data.targetGroupId,
+    data.targetSeasonId,
+    data.startsOn,
+    data.createdBy || null,
+  ];
+
+  const { rows } = await executor.query(query, values);
+  const requestedCount = rows[0] ? Number(rows[0].requested_count || 0) : 0;
+  const importedCount = rows[0] ? Number(rows[0].imported_count || 0) : 0;
+
+  return {
+    requestedCount,
+    importedCount,
+    skippedCount: Math.max(requestedCount - importedCount, 0),
+  };
 }
 
 async function userCanAccessChild(actorUserId, childId) {
@@ -357,6 +679,14 @@ module.exports = {
   updateChild,
   updateStatus,
   assignChildToGroup,
+  findActiveGroupAssignment,
+  closeActiveGroupAssignment,
+  findActiveGroupAssignmentInAcademy,
+  closeActiveGroupAssignmentsInAcademy,
+  getLatestProtectedActivityDateForChildGroup,
+  countActiveChildrenInSeason,
+  importChildrenFromSeasonToGroup,
+  importChildrenToGroup,
   userCanAccessChild,
   userCanAccessGroup,
 };

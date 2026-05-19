@@ -44,7 +44,7 @@ async function createUniqueTokenRecord(data, client) {
 }
 
 function ensureCanGenerateToken(actor, forceRegenerate) {
-  if (!['super_admin', 'admin', 'coach'].includes(actor.role)) {
+  if (!['super_admin', 'admin', 'manager', 'coach'].includes(actor.role)) {
     throw new AppError(403, 'Forbidden');
   }
 
@@ -71,7 +71,7 @@ async function generateTokenCore(childId, context, options) {
 
   ensureCanGenerateToken(context.actor, forceRegenerate);
 
-  const child = await childRepository.findById(childId);
+  const child = await childRepository.findById(childId, client);
 
   if (!child) {
     throw new AppError(404, 'Child not found');
@@ -168,11 +168,20 @@ async function generateTokenForChild(childId, context, options = {}) {
     );
   }
 
-  return {
+  const questionnaire = {
     status: result.tokenRecord.status,
     expiresAt: result.tokenRecord.expires_at,
     link: buildQuestionnaireLink(result.tokenRecord.token),
   };
+
+  if (options.includeTokenRecord) {
+    return {
+      tokenRecord: result.tokenRecord,
+      questionnaire,
+    };
+  }
+
+  return questionnaire;
 }
 
 async function getPublicQuestionnaireByToken(token) {

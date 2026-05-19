@@ -3,6 +3,8 @@ const { env } = require('../config/env');
 const AppError = require('../utils/AppError');
 
 function errorHandler(err, req, res, next) {
+  void next;
+
   let statusCode = 500;
   let message = 'Internal Server Error';
   let errors;
@@ -17,9 +19,18 @@ function errorHandler(err, req, res, next) {
       path: issue.path.join('.'),
       message: issue.message,
     }));
+  } else if (err && typeof err.message === 'string' && err.message.toLowerCase().includes('cors')) {
+    statusCode = 403;
+    message = 'Origin is not allowed';
+  } else if (env.NODE_ENV !== 'production' && err && typeof err.message === 'string') {
+    message = err.message;
   }
 
   const response = { message };
+
+  if (req.id) {
+    response.requestId = req.id;
+  }
 
   if (errors) {
     response.errors = errors;

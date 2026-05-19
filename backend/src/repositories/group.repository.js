@@ -1,5 +1,9 @@
 const { pool } = require('../db/postgres');
 
+function getExecutor(client) {
+  return client || pool;
+}
+
 function buildGroupFilters(filters, actor) {
   const joins = [
     'INNER JOIN seasons s ON s.id = g.season_id',
@@ -117,7 +121,9 @@ async function findById(id) {
   return rows[0] || null;
 }
 
-async function findByIdWithSeasonAndAcademy(id) {
+async function findByIdWithSeasonAndAcademy(id, client) {
+  const executor = getExecutor(client);
+
   const query = `
     SELECT
       g.id,
@@ -143,11 +149,13 @@ async function findByIdWithSeasonAndAcademy(id) {
     LIMIT 1
   `;
 
-  const { rows } = await pool.query(query, [id]);
+  const { rows } = await executor.query(query, [id]);
   return rows[0] || null;
 }
 
-async function findBySeasonAndName(seasonId, name) {
+async function findBySeasonAndName(seasonId, name, client) {
+  const executor = getExecutor(client);
+
   const query = `
     SELECT
       id,
@@ -167,11 +175,13 @@ async function findBySeasonAndName(seasonId, name) {
     LIMIT 1
   `;
 
-  const { rows } = await pool.query(query, [seasonId, name]);
+  const { rows } = await executor.query(query, [seasonId, name]);
   return rows[0] || null;
 }
 
-async function createGroup(data) {
+async function createGroup(data, client) {
+  const executor = getExecutor(client);
+
   const query = `
     INSERT INTO groups (
       season_id,
@@ -196,13 +206,13 @@ async function createGroup(data) {
     data.createdBy || null,
   ];
 
-  const { rows } = await pool.query(query, values);
+  const { rows } = await executor.query(query, values);
 
   if (!rows[0]) {
     return null;
   }
 
-  return findByIdWithSeasonAndAcademy(rows[0].id);
+  return findByIdWithSeasonAndAcademy(rows[0].id, client);
 }
 
 async function updateGroup(id, data) {

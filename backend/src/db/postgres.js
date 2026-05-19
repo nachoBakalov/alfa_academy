@@ -5,6 +5,10 @@ const pool = new Pool({
   connectionString: env.DATABASE_URL,
 });
 
+pool.on('connect', (client) => {
+  client.query("SET client_encoding TO 'UTF8'").catch(() => {});
+});
+
 async function withTransaction(callback) {
   const client = await pool.connect();
 

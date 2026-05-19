@@ -26,6 +26,14 @@ const listSeasonsQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+const seasonChildrenQuerySchema = z.object({
+  groupId: z.coerce.number().int().positive().optional(),
+  isActive: booleanFromQuerySchema,
+  search: z.string().trim().max(150).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 const seasonIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
@@ -71,6 +79,7 @@ const updateSeasonStatusSchema = z.object({
 
 module.exports = {
   listSeasonsQuerySchema,
+  seasonChildrenQuerySchema,
   seasonIdParamSchema,
   createSeasonSchema,
   updateSeasonSchema,

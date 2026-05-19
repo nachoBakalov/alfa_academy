@@ -19,7 +19,9 @@ const booleanFromQuerySchema = z.preprocess((value) => {
 }, z.boolean().optional());
 
 const listChildrenQuerySchema = z.object({
+  academyId: z.coerce.number().int().positive().optional(),
   groupId: z.coerce.number().int().positive().optional(),
+  seasonId: z.coerce.number().int().positive().optional(),
   isActive: booleanFromQuerySchema,
   search: z.string().trim().max(150).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -68,6 +70,15 @@ const generateQuestionnaireTokenSchema = z.object({
   forceRegenerate: z.boolean().default(false),
 });
 
+const sendQuestionnaireEmailSchema = z.object({
+  forceRegenerate: z.boolean().default(false),
+});
+
+const assignChildToGroupSchema = z.object({
+  groupId: z.coerce.number().int().positive(),
+  startsOn: dateSchema,
+});
+
 module.exports = {
   listChildrenQuerySchema,
   childIdParamSchema,
@@ -75,4 +86,6 @@ module.exports = {
   updateChildSchema,
   updateChildStatusSchema,
   generateQuestionnaireTokenSchema,
+  sendQuestionnaireEmailSchema,
+  assignChildToGroupSchema,
 };

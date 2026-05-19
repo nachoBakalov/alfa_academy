@@ -1,7 +1,10 @@
 const AppError = require('../utils/AppError');
+const { withTransaction } = require('../db/postgres');
+const academyRepository = require('../repositories/academy.repository');
 const groupRepository = require('../repositories/group.repository');
 const seasonRepository = require('../repositories/season.repository');
 const coachGroupRepository = require('../repositories/coachGroup.repository');
+const childRepository = require('../repositories/child.repository');
 const auditLogRepository = require('../repositories/auditLog.repository');
 
 function toCoachResponse(coach) {
@@ -47,6 +50,26 @@ function ensureCanManageGroups(actor) {
   if (!['super_admin', 'admin'].includes(actor.role)) {
     throw new AppError(403, 'Forbidden');
   }
+}
+
+function ensureCanImportChildren(actor) {
+  if (!['super_admin', 'admin', 'manager', 'coach'].includes(actor.role)) {
+    throw new AppError(403, 'Forbidden');
+  }
+}
+
+function todayAsDateString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function ensureValidDateString(value) {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new AppError(400, 'Invalid startsOn date');
+  }
+
+  return value;
 }
 
 async function ensureCanViewGroup(actor, groupId) {
@@ -106,51 +129,103 @@ async function getGroupById(id, actor) {
 async function createGroup(payload, context) {
   ensureCanManageGroups(context.actor);
 
-  const season = await seasonRepository.findByIdWithAcademy(payload.seasonId);
+  const createdGroup = await withTransaction(async (client) => {
+    let season = null;
 
-  if (!season) {
-    throw new AppError(400, 'Season not found');
-  }
+    if (payload.seasonId !== undefined) {
+      season = await seasonRepository.findByIdWithAcademy(payload.seasonId, client);
+    }
 
-  if (!season.is_active) {
-    throw new AppError(400, 'Cannot create group in inactive season');
-  }
+    if (!season && payload.academyId !== undefined) {
+      const academy = await academyRepository.findById(payload.academyId);
 
-  if (!season.academy_is_active) {
-    throw new AppError(400, 'Cannot create group in inactive academy');
-  }
+      if (!academy) {
+        throw new AppError(400, 'Academy not found');
+      }
 
-  const groupName = payload.name.trim();
-  const existingByName = await groupRepository.findBySeasonAndName(payload.seasonId, groupName);
+      if (!academy.is_active) {
+        throw new AppError(400, 'Cannot create group in inactive academy');
+      }
 
-  if (existingByName) {
-    throw new AppError(409, 'Group name already exists in season');
-  }
+      season = await seasonRepository.findOrCreateDefaultSeasonForAcademy(
+        payload.academyId,
+        context.actor.id,
+        client
+      );
+    }
 
-  ensureAgeBounds(payload.ageMin ?? null, payload.ageMax ?? null);
+    if (!season) {
+      throw new AppError(400, 'seasonId or academyId is required');
+    }
 
-  const createdGroup = await groupRepository.createGroup({
-    seasonId: payload.seasonId,
-    name: groupName,
-    description: payload.description,
-    ageMin: payload.ageMin,
-    ageMax: payload.ageMax,
-    capacity: payload.capacity,
-    createdBy: context.actor.id,
-  });
+    if (!season.is_active) {
+      throw new AppError(400, 'Cannot create group in inactive season');
+    }
 
-  await auditLogRepository.createAuditLog({
-    actorUserId: context.actor.id,
-    entityType: 'group',
-    entityId: createdGroup.id,
-    action: 'group.created',
-    metadata: {
-      changedFields: ['seasonId', 'name', 'description', 'ageMin', 'ageMax', 'capacity'],
-      seasonId: createdGroup.season_id,
-      groupId: createdGroup.id,
-    },
-    ipAddress: context.ipAddress,
-    userAgent: context.userAgent,
+    if (!season.academy_is_active) {
+      throw new AppError(400, 'Cannot create group in inactive academy');
+    }
+
+    if (
+      payload.academyId !== undefined &&
+      Number(payload.academyId) !== Number(season.academy_id)
+    ) {
+      throw new AppError(400, 'seasonId does not belong to academyId');
+    }
+
+    const groupName = payload.name.trim();
+    const existingByName = await groupRepository.findBySeasonAndName(
+      season.id,
+      groupName,
+      client
+    );
+
+    if (existingByName) {
+      throw new AppError(409, 'Group name already exists in season');
+    }
+
+    ensureAgeBounds(payload.ageMin ?? null, payload.ageMax ?? null);
+
+    const created = await groupRepository.createGroup(
+      {
+        seasonId: season.id,
+        name: groupName,
+        description: payload.description,
+        ageMin: payload.ageMin,
+        ageMax: payload.ageMax,
+        capacity: payload.capacity,
+        createdBy: context.actor.id,
+      },
+      client
+    );
+
+    await auditLogRepository.createAuditLog(
+      {
+        actorUserId: context.actor.id,
+        entityType: 'group',
+        entityId: created.id,
+        action: 'group.created',
+        metadata: {
+          changedFields: [
+            'academyId',
+            'seasonId',
+            'name',
+            'description',
+            'ageMin',
+            'ageMax',
+            'capacity',
+          ],
+          academyId: created.academy_id,
+          seasonId: created.season_id,
+          groupId: created.id,
+        },
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+      },
+      client
+    );
+
+    return created;
   });
 
   const coaches = await coachGroupRepository.listCoachesForGroup(createdGroup.id);
@@ -254,10 +329,199 @@ async function updateGroupStatus(id, payload, context) {
   return toGroupResponse(updatedGroup, coaches.map(toCoachResponse));
 }
 
+async function importChildren(groupId, payload, context) {
+  ensureCanImportChildren(context.actor);
+
+  const targetGroup = await groupRepository.findByIdWithSeasonAndAcademy(groupId);
+
+  if (!targetGroup) {
+    throw new AppError(404, 'Group not found');
+  }
+
+  await ensureCanViewGroup(context.actor, groupId);
+
+  if (!targetGroup.is_active) {
+    throw new AppError(400, 'Group must be active');
+  }
+
+  if (!targetGroup.season_is_active) {
+    throw new AppError(400, 'Target season must be active');
+  }
+
+  if (!targetGroup.academy_is_active) {
+    throw new AppError(400, 'Target academy must be active');
+  }
+
+  const sourceGroup = payload.sourceGroupId
+    ? await groupRepository.findByIdWithSeasonAndAcademy(payload.sourceGroupId)
+    : null;
+
+  if (payload.sourceGroupId && !sourceGroup) {
+    throw new AppError(400, 'Source group not found');
+  }
+
+  if (
+    sourceGroup &&
+    payload.sourceAcademyId !== undefined &&
+    Number(sourceGroup.academy_id) !== Number(payload.sourceAcademyId)
+  ) {
+    throw new AppError(400, 'sourceGroupId must belong to sourceAcademyId');
+  }
+
+  let effectiveSourceAcademyId =
+    payload.sourceAcademyId !== undefined ? Number(payload.sourceAcademyId) : null;
+
+  if (sourceGroup) {
+    effectiveSourceAcademyId = Number(sourceGroup.academy_id);
+  }
+
+  const sourceSeason = payload.sourceSeasonId
+    ? await seasonRepository.findByIdWithAcademy(payload.sourceSeasonId)
+    : null;
+
+  if (payload.sourceSeasonId && !sourceSeason) {
+    throw new AppError(400, 'Source season not found');
+  }
+
+  if (sourceSeason) {
+    if (
+      effectiveSourceAcademyId !== null &&
+      Number(effectiveSourceAcademyId) !== Number(sourceSeason.academy_id)
+    ) {
+      throw new AppError(400, 'sourceSeasonId must belong to sourceAcademyId');
+    }
+
+    effectiveSourceAcademyId = Number(sourceSeason.academy_id);
+  }
+
+  if (effectiveSourceAcademyId !== null) {
+    const sourceAcademy = await academyRepository.findById(effectiveSourceAcademyId);
+
+    if (!sourceAcademy) {
+      throw new AppError(400, 'Source academy not found');
+    }
+  }
+
+  if (context.actor.role === 'coach') {
+    const canAccessTargetAcademy = await academyRepository.coachCanAccessAcademy(
+      context.actor.id,
+      Number(targetGroup.academy_id)
+    );
+
+    if (!canAccessTargetAcademy) {
+      throw new AppError(403, 'Forbidden');
+    }
+
+    if (effectiveSourceAcademyId === null) {
+      effectiveSourceAcademyId = Number(targetGroup.academy_id);
+    }
+
+    const canAccessSourceAcademy = await academyRepository.coachCanAccessAcademy(
+      context.actor.id,
+      effectiveSourceAcademyId
+    );
+
+    if (!canAccessSourceAcademy) {
+      throw new AppError(403, 'Forbidden');
+    }
+  }
+
+  if (
+    effectiveSourceAcademyId !== null &&
+    Number(effectiveSourceAcademyId) === Number(targetGroup.academy_id) &&
+    sourceGroup &&
+    Number(sourceGroup.id) === Number(targetGroup.id)
+  ) {
+    throw new AppError(400, 'Source group must be different from target group');
+  }
+
+  const startsOn = ensureValidDateString(payload.startsOn || todayAsDateString());
+  const isLegacySeasonImport =
+    payload.sourceSeasonId !== undefined &&
+    (!Array.isArray(payload.childIds) || payload.childIds.length === 0);
+
+  if (isLegacySeasonImport && Number(payload.sourceSeasonId) === Number(targetGroup.season_id)) {
+    throw new AppError(400, 'Source season must be different from target group season');
+  }
+
+  const result = await withTransaction(async (client) => {
+    let importResult;
+
+    if (isLegacySeasonImport) {
+      const [requestedCount, importedCount] = await Promise.all([
+        childRepository.countActiveChildrenInSeason(payload.sourceSeasonId, client),
+        childRepository.importChildrenFromSeasonToGroup(
+          {
+            sourceSeasonId: payload.sourceSeasonId,
+            targetGroupId: groupId,
+            targetSeasonId: Number(targetGroup.season_id),
+            startsOn,
+            createdBy: context.actor.id,
+          },
+          client
+        ),
+      ]);
+
+      importResult = {
+        requestedCount,
+        importedCount,
+        skippedCount: Math.max(requestedCount - importedCount, 0),
+      };
+    } else {
+      importResult = await childRepository.importChildrenToGroup(
+        {
+          childIds: payload.childIds,
+          sourceAcademyId: effectiveSourceAcademyId,
+          sourceGroupId: payload.sourceGroupId,
+          targetGroupId: groupId,
+          targetSeasonId: Number(targetGroup.season_id),
+          startsOn,
+          createdBy: context.actor.id,
+        },
+        client
+      );
+    }
+
+    await auditLogRepository.createAuditLog(
+      {
+        actorUserId: context.actor.id,
+        entityType: 'group',
+        entityId: Number(groupId),
+        action: 'group.children_imported',
+        metadata: {
+          groupId: Number(groupId),
+          academyId: Number(targetGroup.academy_id),
+          targetSeasonId: Number(targetGroup.season_id),
+          sourceAcademyId: effectiveSourceAcademyId,
+          sourceSeasonId: payload.sourceSeasonId || null,
+          sourceGroupId: payload.sourceGroupId || null,
+          requestedChildrenCount: importResult.requestedCount,
+          startsOn,
+          importedCount: importResult.importedCount,
+          skippedCount: importResult.skippedCount,
+        },
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+      },
+      client
+    );
+
+    return importResult;
+  });
+
+  return {
+    groupId: Number(targetGroup.id),
+    academyId: Number(targetGroup.academy_id),
+    importedCount: result.importedCount,
+    skippedCount: result.skippedCount,
+  };
+}
+
 module.exports = {
   listGroups,
   getGroupById,
   createGroup,
   updateGroup,
   updateGroupStatus,
+  importChildren,
 };

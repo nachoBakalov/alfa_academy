@@ -31,6 +31,14 @@ const dailyQuerySchema = z.object({
   date: dateSchema,
 });
 
+const weeklyQuerySchema = z.object({
+  weekStartDate: dateSchema,
+});
+
+const recalculateWeeklySchema = z.object({
+  weekStartDate: dateSchema,
+});
+
 const activeDaySchema = z.object({
   dayOfWeek: z.coerce.number().int().min(1).max(7),
   isActive: z.boolean(),
@@ -90,6 +98,8 @@ const saveDailyEvaluationsSchema = z
 module.exports = {
   groupIdParamSchema,
   dailyQuerySchema,
+  weeklyQuerySchema,
+  recalculateWeeklySchema,
   updateActiveDaysSchema,
   saveDailyEvaluationsSchema,
 };

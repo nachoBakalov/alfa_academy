@@ -17,13 +17,26 @@ function buildAcademyFilters(filters, actor) {
   }
 
   if (actor.role === 'coach') {
-    joins.push(
-      'INNER JOIN seasons s ON s.academy_id = a.id',
-      'INNER JOIN groups g ON g.season_id = s.id',
-      'INNER JOIN coach_groups cg ON cg.group_id = g.id AND cg.unassigned_at IS NULL'
-    );
     values.push(actor.id);
-    conditions.push(`cg.coach_id = $${values.length}`);
+    const coachIdPlaceholder = `$${values.length}`;
+    conditions.push(`(
+      EXISTS (
+        SELECT 1
+        FROM coach_academies ca
+        WHERE ca.coach_id = ${coachIdPlaceholder}
+          AND ca.academy_id = a.id
+          AND ca.unassigned_at IS NULL
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM coach_groups cg
+        INNER JOIN groups g ON g.id = cg.group_id
+        INNER JOIN seasons s ON s.id = g.season_id
+        WHERE cg.coach_id = ${coachIdPlaceholder}
+          AND cg.unassigned_at IS NULL
+          AND s.academy_id = a.id
+      )
+    )`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -180,6 +193,13 @@ async function coachCanAccessAcademy(coachId, academyId) {
   const query = `
     SELECT EXISTS (
       SELECT 1
+      FROM coach_academies ca
+      WHERE ca.coach_id = $1
+        AND ca.academy_id = $2
+        AND ca.unassigned_at IS NULL
+    )
+    OR EXISTS (
+      SELECT 1
       FROM coach_groups cg
       INNER JOIN groups g ON g.id = cg.group_id
       INNER JOIN seasons s ON s.id = g.season_id
@@ -193,6 +213,112 @@ async function coachCanAccessAcademy(coachId, academyId) {
   return rows[0] ? rows[0].can_access : false;
 }
 
+function buildAcademyChildrenFilters(academyId, filters = {}) {
+  const values = [academyId];
+  const conditions = ['TRUE'];
+
+  if (filters.groupId !== undefined) {
+    values.push(filters.groupId);
+    conditions.push(`cga.group_id = $${values.length}`);
+  }
+
+  if (filters.search) {
+    values.push(`%${filters.search}%`);
+    const placeholder = `$${values.length}`;
+    conditions.push(`(
+      c.first_name ILIKE ${placeholder}
+      OR c.last_name ILIKE ${placeholder}
+      OR CONCAT(c.first_name, ' ', c.last_name) ILIKE ${placeholder}
+    )`);
+  }
+
+  return {
+    values,
+    whereClause: conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '',
+  };
+}
+
+async function listAcademyChildren(academyId, filters = {}) {
+  const { values, whereClause } = buildAcademyChildrenFilters(academyId, filters);
+
+  const query = `
+    SELECT
+      c.id,
+      c.first_name,
+      c.last_name,
+      c.is_active,
+      g.id AS current_group_id,
+      g.name AS current_group_name,
+      a.id AS academy_id,
+      a.name AS academy_name,
+      qt.status AS questionnaire_status,
+      qt.expires_at AS questionnaire_expires_at
+    FROM children c
+    INNER JOIN LATERAL (
+      SELECT
+        cga.child_id,
+        cga.group_id
+      FROM child_group_assignments cga
+      INNER JOIN groups g ON g.id = cga.group_id
+      INNER JOIN seasons s ON s.id = g.season_id
+      WHERE cga.child_id = c.id
+        AND cga.ends_on IS NULL
+        AND s.academy_id = $1
+      ORDER BY cga.starts_on DESC, cga.id DESC
+      LIMIT 1
+    ) cga ON TRUE
+    INNER JOIN groups g ON g.id = cga.group_id
+    INNER JOIN seasons s ON s.id = g.season_id
+    INNER JOIN academies a ON a.id = s.academy_id
+    LEFT JOIN LATERAL (
+      SELECT qt.status, qt.expires_at
+      FROM questionnaire_tokens qt
+      WHERE qt.child_id = c.id
+      ORDER BY qt.created_at DESC, qt.id DESC
+      LIMIT 1
+    ) qt ON TRUE
+    WHERE a.id = $1
+    ${whereClause}
+    ORDER BY c.last_name ASC, c.first_name ASC, c.id ASC
+    LIMIT $${values.length + 1}
+    OFFSET $${values.length + 2}
+  `;
+
+  const queryValues = [...values, filters.limit, filters.offset];
+  const { rows } = await pool.query(query, queryValues);
+  return rows;
+}
+
+async function countAcademyChildren(academyId, filters = {}) {
+  const { values, whereClause } = buildAcademyChildrenFilters(academyId, filters);
+
+  const query = `
+    SELECT COUNT(*)::int AS total
+    FROM children c
+    INNER JOIN LATERAL (
+      SELECT
+        cga.child_id,
+        cga.group_id
+      FROM child_group_assignments cga
+      INNER JOIN groups g ON g.id = cga.group_id
+      INNER JOIN seasons s ON s.id = g.season_id
+      WHERE cga.child_id = c.id
+        AND cga.ends_on IS NULL
+        AND s.academy_id = $1
+      ORDER BY cga.starts_on DESC, cga.id DESC
+      LIMIT 1
+    ) cga ON TRUE
+    INNER JOIN groups g ON g.id = cga.group_id
+    INNER JOIN seasons s ON s.id = g.season_id
+    INNER JOIN academies a ON a.id = s.academy_id
+    WHERE a.id = $1
+    ${whereClause}
+  `;
+
+  const { rows } = await pool.query(query, values);
+  return rows[0] ? Number(rows[0].total) : 0;
+}
+
 module.exports = {
   listAcademies,
   countAcademies,
@@ -202,4 +328,6 @@ module.exports = {
   updateAcademy,
   updateStatus,
   coachCanAccessAcademy,
+  listAcademyChildren,
+  countAcademyChildren,
 };

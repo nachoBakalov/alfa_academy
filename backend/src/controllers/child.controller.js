@@ -7,6 +7,8 @@ const {
   updateChildSchema,
   updateChildStatusSchema,
   generateQuestionnaireTokenSchema,
+  sendQuestionnaireEmailSchema,
+  assignChildToGroupSchema,
 } = require('../validations/child.validation');
 
 function getRequestContext(req) {
@@ -72,6 +74,27 @@ async function generateQuestionnaireToken(req, res) {
   res.status(200).json({ questionnaire });
 }
 
+async function sendQuestionnaireEmail(req, res) {
+  const { id } = childIdParamSchema.parse(req.params);
+  const payload = sendQuestionnaireEmailSchema.parse(req.body || {});
+
+  const result = await childService.sendQuestionnaireEmail(
+    id,
+    payload,
+    getRequestContext(req)
+  );
+
+  res.status(200).json(result);
+}
+
+async function assignChildToGroup(req, res) {
+  const { id } = childIdParamSchema.parse(req.params);
+  const payload = assignChildToGroupSchema.parse(req.body);
+
+  const result = await childService.assignChildToGroup(id, payload, getRequestContext(req));
+  res.status(201).json(result);
+}
+
 module.exports = {
   listChildren,
   getChildProfile,
@@ -80,4 +103,6 @@ module.exports = {
   updateChild,
   updateChildStatus,
   generateQuestionnaireToken,
+  sendQuestionnaireEmail,
+  assignChildToGroup,
 };

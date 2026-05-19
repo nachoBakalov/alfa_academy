@@ -17,5 +17,10 @@ router.post(
   '/:id/questionnaire-token',
   asyncHandler(childController.generateQuestionnaireToken)
 );
+router.post(
+  '/:id/questionnaire-token/send-email',
+  asyncHandler(childController.sendQuestionnaireEmail)
+);
+router.post('/:id/group-assignment', asyncHandler(childController.assignChildToGroup));
 
 module.exports = router;

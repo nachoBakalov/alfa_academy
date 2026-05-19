@@ -15,6 +15,11 @@ router.put(
   '/groups/:groupId/active-days',
   asyncHandler(socialBehaviorController.updateGroupActiveDays)
 );
+router.get('/groups/:groupId/weekly', asyncHandler(socialBehaviorController.getWeeklySummary));
+router.post(
+  '/groups/:groupId/weekly/recalculate',
+  asyncHandler(socialBehaviorController.recalculateWeeklySummary)
+);
 router.get(
   '/groups/:groupId/daily/summary',
   asyncHandler(socialBehaviorController.getDailySummary)
