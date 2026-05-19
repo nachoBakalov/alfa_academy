@@ -121,6 +121,12 @@ export default function DashboardPage() {
             Спорт
           </Button>
           <Button onClick={() => navigate('/reports')}>Справки</Button>
+          <Button variant="secondary" onClick={() => navigate('/statistics')}>
+            Статистика
+          </Button>
+          <Button variant="secondary" onClick={() => navigate('/group-leaderboard')}>
+            Класация групи
+          </Button>
         </div>
       </Card>
     </div>

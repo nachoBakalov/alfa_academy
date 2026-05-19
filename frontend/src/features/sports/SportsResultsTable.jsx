@@ -16,7 +16,7 @@ function boolTone(value) {
     return 'neutral';
   }
 
-  return value ? 'success' : 'warning';
+  return value ? 'success' : 'danger';
 }
 
 export default function SportsResultsTable({
@@ -106,7 +106,7 @@ export default function SportsResultsTable({
                       label={boolLabel(
                         row.repeatedOrImprovedBaseline,
                         'Повторил/подобрил',
-                        'Нужно е насърчаване'
+                        'Нужда от насърчаване'
                       )}
                       tone={boolTone(row.repeatedOrImprovedBaseline)}
                     />
@@ -216,7 +216,7 @@ export default function SportsResultsTable({
                     label={boolLabel(
                       row.repeatedOrImprovedBaseline,
                       'Повторил/подобрил',
-                      'Нужно е насърчаване'
+                      'Нужда от насърчаване'
                     )}
                     tone={boolTone(row.repeatedOrImprovedBaseline)}
                   />

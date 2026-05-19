@@ -7,6 +7,7 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "dev:check-utf8": "node scripts/dev/check-utf8-definition.js",
+    "dev:check-statistics": "node scripts/dev/check-statistics-sources.js",
     "dev:send-test-email": "node scripts/dev/send-test-email.js",
     "dev:qa:trainers": "node scripts/dev/run-trainer-manual-qa.js",
     "create:super-admin": "node scripts/create-super-admin.js",

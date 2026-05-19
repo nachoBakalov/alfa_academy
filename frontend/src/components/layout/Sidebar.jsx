@@ -13,6 +13,8 @@ const ROLE_ITEMS = {
     { label: 'Креативност', to: '/creativity', enabled: true },
     { label: 'Спортни предизвикателства', to: '/sports', enabled: true },
     { label: 'Справки', to: '/reports', enabled: true },
+    { label: 'Статистика', to: '/statistics', enabled: true },
+    { label: 'Класация групи', to: '/group-leaderboard', enabled: true },
   ],
   admin: [
     { label: 'Потребители', to: '/users', enabled: true },
@@ -24,6 +26,8 @@ const ROLE_ITEMS = {
     { label: 'Креативност', to: '/creativity', enabled: true },
     { label: 'Спортни предизвикателства', to: '/sports', enabled: true },
     { label: 'Справки', to: '/reports', enabled: true },
+    { label: 'Статистика', to: '/statistics', enabled: true },
+    { label: 'Класация групи', to: '/group-leaderboard', enabled: true },
   ],
   manager: [
     { label: 'Треньорски панел', to: '/coach/my-groups', enabled: true },
@@ -35,6 +39,8 @@ const ROLE_ITEMS = {
     { label: 'Креативност', to: '/creativity', enabled: true },
     { label: 'Спортни предизвикателства', to: '/sports', enabled: true },
     { label: 'Справки', to: '/reports', enabled: true },
+    { label: 'Статистика', to: '/statistics', enabled: true },
+    { label: 'Класация групи', to: '/group-leaderboard', enabled: true },
   ],
   coach: [
     { label: 'Моите групи', to: '/coach/my-groups', enabled: true },
@@ -44,6 +50,8 @@ const ROLE_ITEMS = {
     { label: 'Креативност', to: '/creativity', enabled: true },
     { label: 'Спортни предизвикателства', to: '/sports', enabled: true },
     { label: 'Справки', to: '/reports', enabled: true },
+    { label: 'Статистика', to: '/statistics', enabled: true },
+    { label: 'Класация групи', to: '/group-leaderboard', enabled: true },
   ],
 };
 

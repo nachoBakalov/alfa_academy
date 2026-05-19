@@ -17,6 +17,22 @@ function StatCard({ label, value, tone = 'neutral' }) {
   );
 }
 
+function getFinalTotalTone(summary) {
+  if (!summary || !summary.finalResultsCount) {
+    return 'neutral';
+  }
+
+  return summary.groupTargetReached ? 'success' : 'danger';
+}
+
+function getRepeatedOrImprovedTone(summary) {
+  if (!summary || !summary.finalResultsCount) {
+    return 'neutral';
+  }
+
+  return summary.failSafeReached ? 'success' : 'danger';
+}
+
 export default function SportsChallengeSummaryCards({ summary, unit }) {
   if (!summary) {
     return null;
@@ -32,23 +48,23 @@ export default function SportsChallengeSummaryCards({ summary, unit }) {
         <StatCard
           label="Финален сбор"
           value={formatNumber(summary.finalTotal, unit)}
-          tone="success"
+          tone={getFinalTotalTone(summary)}
         />
         <StatCard
           label="Повторили/подобрили"
           value={`${summary.repeatedOrImprovedCount} (${formatNumber(summary.repeatedOrImprovedPercentage)}%)`}
-          tone="warning"
+          tone={getRepeatedOrImprovedTone(summary)}
         />
       </div>
 
       <div className="sports-summary-statuses">
         <StatusPill
           label={formatGroupTargetReached(summary.groupTargetReached)}
-          tone={summary.groupTargetReached ? 'success' : 'warning'}
+          tone={summary.groupTargetReached ? 'success' : 'danger'}
         />
         <StatusPill
           label={formatFailSafeReached(summary.failSafeReached)}
-          tone={summary.failSafeReached ? 'success' : 'warning'}
+          tone={summary.failSafeReached ? 'success' : 'danger'}
         />
         <StatusPill
           label={formatFinalStatus(summary.finalStatus)}

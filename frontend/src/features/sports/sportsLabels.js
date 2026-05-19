@@ -49,20 +49,18 @@ export function getFinalStatusTone(finalStatus) {
   }
 
   if (finalStatus === 'not_passed') {
-    return 'warning';
+    return 'danger';
   }
 
   return 'neutral';
 }
 
 export function formatGroupTargetReached(value) {
-  return value ? 'Груповият таргет е постигнат' : 'Има още възможност за напредък';
+  return value ? 'Груповият таргет е постигнат' : 'Груповият таргет не е постигнат';
 }
 
 export function formatFailSafeReached(value) {
-  return value
-    ? 'Fail-safe условието е постигнато'
-    : 'Нужно е още насърчаване';
+  return value ? 'Fail-safe условието е постигнато' : 'Нужни са още опити';
 }
 
 export function formatResultDirection(value) {

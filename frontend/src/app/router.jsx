@@ -28,6 +28,8 @@ const SportsChallengeDetailPage = lazy(
 );
 const ReportsPage = lazy(() => import('../features/reports/ReportsPage'));
 const GroupReportPage = lazy(() => import('../features/reports/GroupReportPage'));
+const StatisticsPage = lazy(() => import('../features/statistics/StatisticsPage'));
+const GroupLeaderboardPage = lazy(() => import('../features/statistics/GroupLeaderboardPage'));
 const MyGroupsPage = lazy(() => import('../features/coach/MyGroupsPage'));
 const UnauthorizedPage = lazy(() => import('../pages/UnauthorizedPage'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
@@ -247,6 +249,28 @@ export default function AppRouter() {
               <RequireAuth allowedRoles={['super_admin', 'admin', 'manager', 'coach']}>
                 <RouteLoader>
                   <GroupReportPage />
+                </RouteLoader>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/statistics"
+            element={
+              <RequireAuth allowedRoles={['super_admin', 'admin', 'manager', 'coach']}>
+                <RouteLoader>
+                  <StatisticsPage />
+                </RouteLoader>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/group-leaderboard"
+            element={
+              <RequireAuth allowedRoles={['super_admin', 'admin', 'manager', 'coach']}>
+                <RouteLoader>
+                  <GroupLeaderboardPage />
                 </RouteLoader>
               </RequireAuth>
             }
